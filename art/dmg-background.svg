@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <!-- Finder places Moire.app at (165, 180) and Applications at (495, 180); see scripts/dmg-settings.py. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FAFAFF"/>
+      <stop offset="1" stop-color="#EEF0FF"/>
+    </linearGradient>
+    <radialGradient id="fade" cx="0.5" cy="0.45" r="0.55">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="ringsFade" maskUnits="userSpaceOnUse" x="0" y="0" width="660" height="400">
+      <rect width="660" height="400" fill="url(#fade)"/>
+    </mask>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="660" height="400" fill="url(#bg)"/>
+  <g mask="url(#ringsFade)">
+    <g fill="none" stroke="#7C5CFF" stroke-width="4" stroke-opacity="0.07">
+    <circle cx="300" cy="190" r="12.0"/>
+    <circle cx="300" cy="190" r="24.0"/>
+    <circle cx="300" cy="190" r="36.0"/>
+    <circle cx="300" cy="190" r="48.0"/>
+    <circle cx="300" cy="190" r="60.0"/>
+    <circle cx="300" cy="190" r="72.0"/>
+    <circle cx="300" cy="190" r="84.0"/>
+    <circle cx="300" cy="190" r="96.0"/>
+    <circle cx="300" cy="190" r="108.0"/>
+    <circle cx="300" cy="190" r="120.0"/>
+    <circle cx="300" cy="190" r="132.0"/>
+    <circle cx="300" cy="190" r="144.0"/>
+    <circle cx="300" cy="190" r="156.0"/>
+    <circle cx="300" cy="190" r="168.0"/>
+    <circle cx="300" cy="190" r="180.0"/>
+    <circle cx="300" cy="190" r="192.0"/>
+    <circle cx="300" cy="190" r="204.0"/>
+    <circle cx="300" cy="190" r="216.0"/>
+    <circle cx="300" cy="190" r="228.0"/>
+    <circle cx="300" cy="190" r="240.0"/>
+    <circle cx="300" cy="190" r="252.0"/>
+    <circle cx="300" cy="190" r="264.0"/>
+    <circle cx="300" cy="190" r="276.0"/>
+    <circle cx="300" cy="190" r="288.0"/>
+    <circle cx="300" cy="190" r="300.0"/>
+    <circle cx="300" cy="190" r="312.0"/>
+    <circle cx="300" cy="190" r="324.0"/>
+    <circle cx="300" cy="190" r="336.0"/>
+    <circle cx="300" cy="190" r="348.0"/>
+    <circle cx="300" cy="190" r="360.0"/>
+    <circle cx="300" cy="190" r="372.0"/>
+    <circle cx="300" cy="190" r="384.0"/>
+    <circle cx="300" cy="190" r="396.0"/>
+    <circle cx="300" cy="190" r="408.0"/>
+    </g>
+    <g fill="none" stroke="#22D3EE" stroke-width="4" stroke-opacity="0.08">
+    <circle cx="360" cy="190" r="12.0"/>
+    <circle cx="360" cy="190" r="24.0"/>
+    <circle cx="360" cy="190" r="36.0"/>
+    <circle cx="360" cy="190" r="48.0"/>
+    <circle cx="360" cy="190" r="60.0"/>
+    <circle cx="360" cy="190" r="72.0"/>
+    <circle cx="360" cy="190" r="84.0"/>
+    <circle cx="360" cy="190" r="96.0"/>
+    <circle cx="360" cy="190" r="108.0"/>
+    <circle cx="360" cy="190" r="120.0"/>
+    <circle cx="360" cy="190" r="132.0"/>
+    <circle cx="360" cy="190" r="144.0"/>
+    <circle cx="360" cy="190" r="156.0"/>
+    <circle cx="360" cy="190" r="168.0"/>
+    <circle cx="360" cy="190" r="180.0"/>
+    <circle cx="360" cy="190" r="192.0"/>
+    <circle cx="360" cy="190" r="204.0"/>
+    <circle cx="360" cy="190" r="216.0"/>
+    <circle cx="360" cy="190" r="228.0"/>
+    <circle cx="360" cy="190" r="240.0"/>
+    <circle cx="360" cy="190" r="252.0"/>
+    <circle cx="360" cy="190" r="264.0"/>
+    <circle cx="360" cy="190" r="276.0"/>
+    <circle cx="360" cy="190" r="288.0"/>
+    <circle cx="360" cy="190" r="300.0"/>
+    <circle cx="360" cy="190" r="312.0"/>
+    <circle cx="360" cy="190" r="324.0"/>
+    <circle cx="360" cy="190" r="336.0"/>
+    <circle cx="360" cy="190" r="348.0"/>
+    <circle cx="360" cy="190" r="360.0"/>
+    <circle cx="360" cy="190" r="372.0"/>
+    <circle cx="360" cy="190" r="384.0"/>
+    <circle cx="360" cy="190" r="396.0"/>
+    <circle cx="360" cy="190" r="408.0"/>
+    </g>
+  </g>
+
+  <path d="M262 168 C 300 120, 360 120, 398 168" fill="none" stroke="url(#arrow)" stroke-width="5"
+        stroke-linecap="round" stroke-dasharray="2 13"/>
+  <path d="M398 149 L400 171 L379 165" fill="none" stroke="#22D3EE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="330" y="330" text-anchor="middle" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="15" font-weight="600" fill="#4C4870">Drag Moire to Applications</text>
+  <text x="330" y="352" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="12" fill="#8A87A8">Compare text, files and folders, beautifully</text>
+</svg>
