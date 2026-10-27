@@ -16,7 +16,7 @@
 **Moire** is a native macOS app for comparing text, files and folders side by side.<br>
 Repo: [github.com/SherinBloemendaal/moire](https://github.com/SherinBloemendaal/moire)
 
-[Install](#-install) · [Highlights](#-highlights) · [How it works](#-how-it-works) · [Folders](#-comparing-folders) · [Shortcuts](#%EF%B8%8F-shortcuts) · [Building](#-building)
+[Install](#-install) · [Highlights](#-highlights) · [How it works](#-how-it-works) · [Folders](#-comparing-folders) · [Shortcuts](#%EF%B8%8F-shortcuts) · [Roadmap](#%EF%B8%8F-roadmap) · [Building](#-building)
 
 </div>
 
@@ -125,6 +125,66 @@ To use Moire as a Git difftool:
 git config --global difftool.moire.cmd '/Applications/Moire.app/Contents/MacOS/Moire "$LOCAL" "$REMOTE"'
 git difftool --tool=moire
 ```
+
+## 🗺️ Roadmap
+
+Moire is growing into a full replacement for tools like Beyond Compare. Speed comes first: Moire has to compare millions of files at once and stay smooth, so every phase below builds on the speed foundation in phase 0.
+
+### ⚡ Phase 0: speed foundation
+
+The base for everything else. Folder comparison in 1.0 reads one file at a time and keeps the whole tree in memory before it shows anything, which is fine for a project folder but not for millions of files.
+
+- [ ] **Read folders on every core.** Walk both trees in parallel with a work-stealing pool (one worker per core), and read file details in batches per folder with `getattrlistbulk` instead of one system call per file.
+- [ ] **Choose how files are compared,** per comparison, from cheap to thorough:
+  - **Metadata only:** size and modification date, without opening a single file. Made for network disks and slow USB drives. A tolerance for dates handles FAT disks (2 seconds) and daylight saving shifts.
+  - **Quick:** size, then a hash of the first and last 64 KB. Catches nearly every change at a fraction of the reads.
+  - **Binary:** every byte, so a file only counts as identical when it really is.
+  - **Line by line:** text files are compared as text, with the ignore options (spaces, case, line endings), and the folder list shows how many lines changed per file.
+- [ ] **A sensible default per disk.** Moire detects when a folder is on a network volume and starts in *Metadata only* there, with one click to compare contents after all.
+- [ ] **Cheapest check first.** Every method stops at the first check that settles it: a different size needs no reads at all, and *Binary* only reads whole files once sizes match. Whole files are hashed with a fast hash (xxHash3 or BLAKE3) on all cores, using memory-mapped reads.
+- [ ] **I/O tuned to the disk.** Keep a separate limit for reads in flight, so a fast SSD is used fully and a network share or USB disk is not flooded.
+- [ ] **Hash cache.** Remember hashes by inode, size and modification date, so comparing the same folders again is close to instant.
+- [ ] **Show results while working.** Rows appear as soon as they are known, with live progress (files per second, bytes per second, time left), and a comparison can be stopped at any moment.
+- [ ] **Compact memory.** Store the tree as flat arrays with shared path parts instead of one object per file, so ten million entries fit in a few hundred MB.
+- [ ] **A list that scales.** Show folder results in an AppKit outline view that only draws visible rows, so scrolling stays smooth with millions of rows.
+- [ ] **Huge text files.** Memory-map the files, hash lines on all cores, and draw only the visible lines, so a file with millions of lines opens and scrolls without delay.
+- [ ] **Benchmarks in CI.** A fixed set of large test trees and files, measured on every change, so a slowdown is caught before it ships.
+
+### 1. Daily use
+
+- [ ] **Search** in the comparison (⌘F), with next and previous match on both sides, and **Go to Line** (⌘L).
+- [ ] **Syntax highlighting** for common languages, worked out only for the visible lines and off the main thread.
+- [ ] **Edit in the comparison itself**, with the markings updating as you type, instead of a separate edit mode.
+- [ ] **Reload automatically** when a file changes on disk (FSEvents), and ask first when there are unsaved edits.
+- [ ] **Folder filters:** include and exclude masks such as `*.swift` or `-node_modules/`, and follow `.gitignore`.
+
+### 2. Merging
+
+- [ ] **Three-way merge** with the common base, left, right and a result pane, so Moire can be used as `git mergetool`.
+- [ ] **Pick single lines** from a change, not only the whole block.
+- [ ] **Export** a comparison as a unified diff (patch) or as an HTML report.
+
+### 3. Folder sync
+
+- [ ] **Copy, mirror or update** from left to right or back, always with a preview of what will happen first.
+- [ ] **Delete (to the Trash), rename and copy** files straight from the folder list.
+
+### 4. Other kinds of files
+
+- [ ] **Hex view** for files that are not text, with the changed bytes marked.
+- [ ] **Images** side by side, as an overlay, and as a difference mask.
+- [ ] **Tables and CSV**, compared cell by cell, with key columns to match rows.
+- [ ] **Archives** such as zip, opened like a folder.
+- [ ] **PDF and Word** documents, compared by their text.
+
+### 5. Workflow
+
+- [ ] **Sessions:** saved comparisons with their settings, and a list of recent ones.
+- [ ] **Several comparisons at once,** in tabs or windows.
+- [ ] **Rules for differences that do not matter:** comments, regular expressions, and line endings, set per file type.
+- [ ] **Align lines by hand** when the automatic pairing is wrong.
+- [ ] **Remote sources:** SFTP, FTP, S3 and other cloud storage.
+- [ ] **Command line and scripting** for automated comparisons and reports, and **printing**.
 
 ## 🔨 Building
 
