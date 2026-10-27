@@ -2,8 +2,8 @@
 # Install Moire from GitHub releases.
 # https://github.com/SherinBloemendaal/moire
 #
-#   curl -fsSL https://raw.githubusercontent.com/SherinBloemendaal/moire/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/SherinBloemendaal/moire/main/install.sh | bash -s v1.0.0
+#   curl -fsSL https://sherin.dev/moire/install.sh | bash
+#   curl -fsSL https://sherin.dev/moire/install.sh | bash -s v1.0.0
 #
 # MOIRE_VERSION pins a release tag, MOIRE_INSTALL picks the folder (default /Applications,
 # or ~/Applications when /Applications is not writable).

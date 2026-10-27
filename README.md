@@ -45,13 +45,13 @@ Repo: [github.com/SherinBloemendaal/moire](https://github.com/SherinBloemendaal/
 ## 📦 Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SherinBloemendaal/moire/main/install.sh | bash
+curl -fsSL https://sherin.dev/moire/install.sh | bash
 ```
 
 Pin a release with `bash -s`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SherinBloemendaal/moire/main/install.sh | bash -s v1.0.0
+curl -fsSL https://sherin.dev/moire/install.sh | bash -s v1.0.0
 ```
 
 The script downloads `Moire.zip` from the GitHub release, checks it against `SHA256SUMS`, and installs `Moire.app` into `/Applications` (or `~/Applications` when `/Applications` is not writable; override with `MOIRE_INSTALL`). Run it again to upgrade in place. To uninstall, move `Moire.app` to the Trash.
