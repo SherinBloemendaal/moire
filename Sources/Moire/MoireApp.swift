@@ -197,6 +197,16 @@ struct MoireCommands: Commands {
                 .disabled(!isText || !ComparisonExport.canExport(compare))
             Button("Export as HTML Report…") { ComparisonExport.exportHTML(compare) }
                 .disabled(!isText || !ComparisonExport.canExport(compare))
+            Menu("Export Folder Report") {
+                Button("HTML…") { state.exportFolderReport(.html) }
+                Button("JSON…") { state.exportFolderReport(.json) }
+                Button("Text…") { state.exportFolderReport(.text) }
+            }
+            .disabled(state.mode != .folders || state.folders.tree == nil || state.folders.isComparing)
+            Divider()
+            Button("Print…") { state.printCurrent() }
+                .keyboardShortcut("p")
+                .disabled(!state.canPrint)
         }
         CommandMenu("Compare") {
             Button("Next Change") { compare.goToNextChange() }

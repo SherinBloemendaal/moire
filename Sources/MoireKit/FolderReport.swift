@@ -144,7 +144,7 @@ public enum FolderReport {
 
     // MARK: HTML
 
-    static func escape(_ text: String) -> String {
+    public static func escape(_ text: String) -> String {
         var result = ""
         result.reserveCapacity(text.count)
         for character in text {
