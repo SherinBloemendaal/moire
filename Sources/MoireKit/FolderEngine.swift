@@ -81,9 +81,9 @@ public struct FolderProgress: Sendable, Hashable {
 /// `run()` blocks until the comparison is done. While it runs, other threads can call
 /// `snapshot()` and `progress` to show results as they come in, and `cancel()` to stop it.
 public final class FolderEngine: Sendable {
-    public let left: URL
-    public let right: URL
     public let settings: FolderCompareSettings
+    private let makeSources: @Sendable () throws -> (any FolderSource, any FolderSource)
+    private let sources = Mutex<(left: any FolderSource, right: any FolderSource)?>(nil)
     /// Results of earlier runs. Pairs found here are not read again; new results are added.
     public let cache: ResultCache?
 
@@ -116,9 +116,19 @@ public final class FolderEngine: Sendable {
         return copy
     }
 
-    public init(left: URL, right: URL, settings: FolderCompareSettings = FolderCompareSettings(), cache: ResultCache? = nil) {
-        self.left = left
-        self.right = right
+    /// Compares two local folders.
+    public convenience init(left: URL, right: URL, settings: FolderCompareSettings = FolderCompareSettings(), cache: ResultCache? = nil) {
+        self.init(sources: { (try LocalSource(left), try LocalSource(right)) }, settings: settings, cache: cache)
+    }
+
+    /// Compares two folders from any source. The sources are made when `run()` starts, so a
+    /// missing folder or a failed connection is reported by `run()`.
+    public init(
+        sources: @escaping @Sendable () throws -> (any FolderSource, any FolderSource),
+        settings: FolderCompareSettings = FolderCompareSettings(),
+        cache: ResultCache? = nil
+    ) {
+        makeSources = sources
         self.settings = settings
         // Metadata never reads contents, so there is nothing to remember.
         self.cache = settings.method == .metadata ? nil : cache
@@ -139,17 +149,10 @@ public final class FolderEngine: Sendable {
 
     /// Reads both trees and compares them. Blocks the calling thread until done.
     public func run() throws -> FolderTree {
-        let leftRoot = left.path(percentEncoded: false)
-        let rightRoot = right.path(percentEncoded: false)
-        for root in [leftRoot, rightRoot] {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: root, isDirectory: &isDirectory), isDirectory.boolValue else {
-                throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: root])
-            }
-        }
-
-        let leftVolume = try Volume.of(leftRoot)
-        let rightVolume = try Volume.of(rightRoot)
+        let (leftSource, rightSource) = try makeSources()
+        sources.withLock { $0 = (leftSource, rightSource) }
+        let leftVolume = leftSource.volume
+        let rightVolume = rightSource.volume
         let folderPool = WorkPool<FolderJob>(
             threads: settings.folderThreads ?? Self.folderThreads(left: leftVolume, right: rightVolume),
             name: "Moire folders"
@@ -170,7 +173,7 @@ public final class FolderEngine: Sendable {
 
         pools.withLock { $0 = Pools(folders: folderPool, contents: contentPool) }
         defer { pools.withLock { $0 = nil } }
-        folderPool.submit([FolderJob(item: 0, left: leftRoot, right: rightRoot, relative: "", rules: rootRules)])
+        folderPool.submit([FolderJob(item: 0, path: "", onLeft: true, onRight: true, rules: rootRules)])
         folderPool.waitUntilIdle()
         // Every content job has been handed out once the listing is done.
         contentPool?.waitUntilIdle()
@@ -215,12 +218,21 @@ public final class FolderEngine: Sendable {
 
     private struct FolderJob: Sendable {
         let item: Int32
-        let left: String?
-        let right: String?
         /// The folder's path relative to the compared folders; empty for the root.
-        let relative: String
+        let path: String
+        let onLeft: Bool
+        let onRight: Bool
         /// Exclude masks plus the `.gitignore` rules of this folder and the folders above it.
         let rules: IgnoreRules
+    }
+
+    private func currentSources() -> (left: any FolderSource, right: any FolderSource) {
+        guard let current = sources.withLock({ $0 }) else { preconditionFailure("jobs only run inside run()") }
+        return current
+    }
+
+    private static func join(_ folder: String, _ name: String) -> String {
+        folder.isEmpty ? name : folder + "/" + name
     }
 
     private func read(_ job: FolderJob) {
@@ -229,11 +241,12 @@ public final class FolderEngine: Sendable {
             return
         }
 
+        let (leftSource, rightSource) = currentSources()
         var leftEntries: [DirectoryEntry] = []
         var rightEntries: [DirectoryEntry] = []
         do {
-            if let path = job.left { leftEntries = try DirectoryReader.entries(of: path, skipHidden: settings.skipHidden) }
-            if let path = job.right { rightEntries = try DirectoryReader.entries(of: path, skipHidden: settings.skipHidden) }
+            if job.onLeft { leftEntries = try leftSource.list(job.path, skipHidden: settings.skipHidden) }
+            if job.onRight { rightEntries = try rightSource.list(job.path, skipHidden: settings.skipHidden) }
         } catch {
             tree.withLock { tree in
                 tree.statuses[Int(job.item)] = .unreadable
@@ -244,15 +257,15 @@ public final class FolderEngine: Sendable {
 
         var rules = job.rules
         if settings.filter.useGitignore {
-            for folder in [job.left, job.right].compactMap({ $0 }) {
-                if let text = try? String(contentsOfFile: folder + "/.gitignore", encoding: .utf8) {
-                    rules.add(gitignore: text, base: job.relative)
-                }
+            for (source, entries) in [(leftSource, leftEntries), (rightSource, rightEntries)] where entries.contains(where: { $0.name == ".gitignore" }) || settings.skipHidden {
+                // Hidden entries are not listed when skipped, so the file is opened directly then.
+                guard let file = try? source.open(Self.join(job.path, ".gitignore")), let data = try? file.readAll() else { continue }
+                rules.add(gitignore: String(decoding: data, as: UTF8.self), base: job.path)
             }
         }
         if !rules.isEmpty || !includeRules.isEmpty {
-            leftEntries = leftEntries.filter { keep($0, in: job.relative, rules: rules) }
-            rightEntries = rightEntries.filter { keep($0, in: job.relative, rules: rules) }
+            leftEntries = leftEntries.filter { keep($0, in: job.path, rules: rules) }
+            rightEntries = rightEntries.filter { keep($0, in: job.path, rules: rules) }
         }
 
         var children = pair(leftEntries, rightEntries, job: job)
@@ -281,19 +294,14 @@ public final class FolderEngine: Sendable {
         var contents: [ContentJob] = []
         for (offset, child) in children.enumerated() where child.status == .pending {
             let item = first + Int32(offset)
-            if child.left.kind == .file, child.right.kind == .file, let left = job.left, let right = job.right {
-                contents.append(ContentJob(item: item, left: left + "/" + child.name, right: right + "/" + child.name, leftInfo: child.left, rightInfo: child.right))
+            let path = Self.join(job.path, child.name)
+            if child.left.kind == .file, child.right.kind == .file {
+                contents.append(ContentJob(item: item, path: path, leftInfo: child.left, rightInfo: child.right))
                 continue
             }
             let isFolder = (child.left.kind == .directory || !child.left.exists) && (child.right.kind == .directory || !child.right.exists)
             guard isFolder else { continue }
-            folders.append(FolderJob(
-                item: item,
-                left: child.left.exists ? job.left.map { $0 + "/" + child.name } : nil,
-                right: child.right.exists ? job.right.map { $0 + "/" + child.name } : nil,
-                relative: job.relative.isEmpty ? child.name : job.relative + "/" + child.name,
-                rules: rules
-            ))
+            folders.append(FolderJob(item: item, path: path, onLeft: child.left.exists, onRight: child.right.exists, rules: rules))
         }
         if !contents.isEmpty {
             filesToRead.add(contents.count, ordering: .relaxed)
@@ -306,7 +314,7 @@ public final class FolderEngine: Sendable {
     }
 
     private func keep(_ entry: DirectoryEntry, in folder: String, rules: IgnoreRules) -> Bool {
-        let path = folder.isEmpty ? entry.name : folder + "/" + entry.name
+        let path = Self.join(folder, entry.name)
         let isDirectory = entry.kind == .directory
         if rules.ignores(path, isDirectory: isDirectory) { return false }
         if !includeRules.isEmpty, !isDirectory, !includeRules.matchesAny(path, isDirectory: false) { return false }
@@ -323,8 +331,7 @@ public final class FolderEngine: Sendable {
 
     private struct ContentJob: Sendable {
         let item: Int32
-        let left: String
-        let right: String
+        let path: String
         let leftInfo: FolderTree.SideInfo
         let rightInfo: FolderTree.SideInfo
 
@@ -347,7 +354,11 @@ public final class FolderEngine: Sendable {
             bytesRead.add(bytesRead(for: job), ordering: .relaxed)
         }
         do {
-            let verdict = try ContentComparer.compare(job.left, job.right, size: job.size, method: settings.method, options: settings.diffOptions)
+            let (leftSource, rightSource) = currentSources()
+            let verdict = try ContentComparer.compare(
+                leftSource.open(job.path), rightSource.open(job.path),
+                method: settings.method, options: settings.diffOptions
+            )
             let remembered: ResultCache.Verdict = switch verdict {
             case .identical: .identical
             case .different: .different
@@ -418,9 +429,13 @@ public final class FolderEngine: Sendable {
         case let (a, b) where a != b:
             status = .different
         case (.symbolicLink, .symbolicLink):
-            let leftTarget = job.left.flatMap { try? FileManager.default.destinationOfSymbolicLink(atPath: $0 + "/" + name) }
-            let rightTarget = job.right.flatMap { try? FileManager.default.destinationOfSymbolicLink(atPath: $0 + "/" + name) }
-            status = leftTarget == rightTarget ? .identical : .different
+            let (leftSource, rightSource) = currentSources()
+            let path = Self.join(job.path, name)
+            do {
+                status = try leftSource.linkDestination(path) == rightSource.linkDestination(path) ? .identical : .different
+            } catch {
+                status = .unreadable
+            }
         case (.file, .file):
             status = fileStatus(leftInfo, rightInfo)
         default:
