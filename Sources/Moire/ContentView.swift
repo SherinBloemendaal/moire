@@ -14,6 +14,9 @@ struct ContentView: View {
                     state.openFromFolders(left: left, right: right)
                 }
                 .transition(.opacity)
+            case .merge:
+                MergeView(model: state.merge)
+                    .transition(.opacity)
             }
         }
         .animation(.smooth(duration: 0.25), value: state.mode)
@@ -31,6 +34,7 @@ struct ContentView: View {
                 Picker("Mode", selection: $state.mode) {
                     Label("Text", systemImage: "text.alignleft").tag(AppState.Mode.text)
                     Label("Folders", systemImage: "folder").tag(AppState.Mode.folders)
+                    Label("Merge", systemImage: "arrow.triangle.merge").tag(AppState.Mode.merge)
                 }
                 .pickerStyle(.segmented)
                 .labelStyle(.titleAndIcon)
