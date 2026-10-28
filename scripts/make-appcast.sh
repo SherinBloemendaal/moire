@@ -31,18 +31,23 @@ if [ ! -x "$sign_update" ]; then
     swift package resolve >/dev/null
 fi
 
+# The output of sign_update is never printed: when it fails, it can repeat the key it was given.
 if [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+    if ! printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | grep -Eq '^[A-Za-z0-9+/]{43}=$|^[A-Za-z0-9+/]{86}==$'; then
+        echo "SPARKLE_ED_PRIVATE_KEY is not a private key: it should be one line of base64, as generate_keys -x writes it to a file" >&2
+        exit 1
+    fi
     key_file="$(mktemp)"
     trap 'rm -f "$key_file"' EXIT
     chmod 600 "$key_file"
     printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$key_file"
-    attributes="$("$sign_update" --ed-key-file "$key_file" "$zip")"
+    attributes="$("$sign_update" --ed-key-file "$key_file" "$zip" 2>/dev/null)" || attributes=""
 else
-    attributes="$("$sign_update" --account moire "$zip")"
+    attributes="$("$sign_update" --account moire "$zip" 2>/dev/null)" || attributes=""
 fi
 case "$attributes" in
     *sparkle:edSignature=*length=*) ;;
-    *) echo "sign_update gave no signature: $attributes" >&2; exit 1 ;;
+    *) echo "sign_update could not sign $zip with the private key" >&2; exit 1 ;;
 esac
 
 escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
