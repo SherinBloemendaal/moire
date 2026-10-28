@@ -11,13 +11,21 @@ struct Side {
     }
 
     var content: Content = .text(TextDocument("")) {
-        didSet { revision &+= 1 }
+        didSet { revision = Side.nextRevision() }
     }
     var url: URL?
     var encoding: TextEncoding = .utf8
     var isDirty = false
-    /// Counts every change of `content`, so a change is noticed without comparing the text.
-    private(set) var revision = 0
+    /// Different for every content any side ever had, so a change is noticed without comparing
+    /// the text, also when a whole new side replaces this one.
+    private(set) var revision = Side.nextRevision()
+
+    private static var revisions = 0
+
+    private static func nextRevision() -> Int {
+        revisions += 1
+        return revisions
+    }
 
     init(content: Content = .text(TextDocument("")), url: URL? = nil) {
         self.content = content
@@ -107,8 +115,8 @@ struct FlashedLine: Equatable {
 final class CompareModel {
     typealias Layout = DiffDisplay.Layout
 
-    var left = Side() { didSet { sidesChanged(oldValue: oldValue, newValue: left) } }
-    var right = Side() { didSet { sidesChanged(oldValue: oldValue, newValue: right) } }
+    var left = Side() { didSet { sidesChanged(.left, oldValue: oldValue) } }
+    var right = Side() { didSet { sidesChanged(.right, oldValue: oldValue) } }
 
     var options = DiffOptions(
         whitespace: DiffOptions.Whitespace(rawValue: UserDefaults.standard.string(forKey: "whitespace") ?? "") ?? .exact,
@@ -176,6 +184,11 @@ final class CompareModel {
 
     var isGoToLineVisible = false
     private(set) var flashedLine: FlashedLine?
+
+    /// The colors of each side, for files of a language Moire knows.
+    @ObservationIgnored private(set) var highlighters: [SideID: SyntaxHighlightCache] = [:]
+    /// True while a side changes by an edit rather than being replaced.
+    @ObservationIgnored private var replacedByEdit = false
 
     var isEmpty: Bool { left.isEmpty && right.isEmpty }
     var hasUnsavedChanges: Bool { left.isDirty || right.isDirty }
@@ -247,6 +260,8 @@ final class CompareModel {
 
     private func setDocument(_ document: TextDocument, on side: SideID) {
         guard !self[side].isBinary else { return }
+        replacedByEdit = true
+        defer { replacedByEdit = false }
         self[side].content = .text(document)
         self[side].isDirty = self[side].url != nil
     }
@@ -375,8 +390,11 @@ final class CompareModel {
 
     // MARK: Diffing
 
-    private func sidesChanged(oldValue: Side, newValue: Side) {
+    private func sidesChanged(_ side: SideID, oldValue: Side) {
+        let newValue = self[side]
         guard oldValue.revision != newValue.revision || oldValue.url != newValue.url else { return }
+        // A side read from disk or pasted gets new colors; an edit keeps what still holds.
+        if isReplacement(of: oldValue, by: newValue) { resetHighlighter(side) }
         // Typing recomputes after a short pause; opening or merging recomputes right away.
         scheduleDiff(delay: isEditing ? .milliseconds(150) : .zero)
     }
@@ -404,6 +422,8 @@ final class CompareModel {
             guard !Task.isCancelled else { return }
             diff = result
             isComputing = false
+            highlighters[.left]?.update(to: result.left)
+            highlighters[.right]?.update(to: result.right)
             if let currentHunk, currentHunk >= result.hunks.count { self.currentHunk = result.hunks.isEmpty ? nil : result.hunks.count - 1 }
             expandedFolds = []
             rebuildDisplay()
@@ -551,6 +571,16 @@ final class CompareModel {
             try? await Task.sleep(for: .seconds(1.6))
             if flashedLine == flash { flashedLine = nil }
         }
+    }
+
+    private func isReplacement(of old: Side, by new: Side) -> Bool {
+        old.url != new.url || old.isBinary != new.isBinary || !replacedByEdit
+    }
+
+    /// The language follows the file name; pasted text has none.
+    private func resetHighlighter(_ side: SideID) {
+        let language = self[side].url.flatMap { SyntaxLanguage(fileName: $0.lastPathComponent) }
+        highlighters[side] = self[side].isBinary ? nil : language.map { SyntaxHighlightCache(language: $0) }
     }
 
     /// Unfolds the fold that hides `row`, if any.

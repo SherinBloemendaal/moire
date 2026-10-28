@@ -88,6 +88,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var segmentCache: [Int: (left: [Segment], right: [Segment])] = [:]
     private var widestLine = 0
     private var metricsLineCount = 0
+    private var isHighlighting = false
 
     init(model: CompareModel) {
         self.model = model
@@ -241,6 +242,49 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
                 self?.scrollView.reflectScrolledClipView(clip)
             }
         }
+    }
+
+    // MARK: Syntax colors
+
+    /// Colors the lines around the visible ones off the main thread, then redraws. Asked for by
+    /// a line drawn without colors; several such lines make one request.
+    func requestHighlighting() {
+        guard !isHighlighting else { return }
+        isHighlighting = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let jobs = SideID.allCases.compactMap { side -> (SyntaxHighlightCache, Range<Int>)? in
+                guard let highlighter = self.model.highlighters[side], let lines = self.visibleDocumentLines(on: side) else { return nil }
+                let prefetch = 150
+                return (highlighter, max(0, lines.lowerBound - prefetch)..<(lines.upperBound + prefetch))
+            }
+            guard !jobs.isEmpty else {
+                isHighlighting = false
+                return
+            }
+            Task { [weak self] in
+                let changed = await Task.detached(priority: .userInitiated) {
+                    jobs.map { $0.0.prepare(lines: $0.1) }.contains(true)
+                }.value
+                guard let self else { return }
+                isHighlighting = false
+                if changed { redrawVisibleRows() }
+            }
+        }
+    }
+
+    /// The lines of one side that the visible rows show.
+    private func visibleDocumentLines(on side: SideID) -> Range<Int>? {
+        guard let display else { return nil }
+        let rows = tableView.rows(in: tableView.visibleRect)
+        var lower = Int.max
+        var upper = Int.min
+        for index in rows.location..<(rows.location + rows.length) where index < display.count {
+            guard let row = display[index].row, let line = display.diff.row(at: row, withSegments: false).line(on: side) else { continue }
+            lower = min(lower, line)
+            upper = max(upper, line + 1)
+        }
+        return lower < upper ? lower..<upper : nil
     }
 
     // MARK: Horizontal scrolling

@@ -112,6 +112,16 @@ extension DiffListController {
             .foregroundColor: Palette.text,
             .paragraphStyle: metrics.paragraph,
         ])
+        if let highlighter = model.highlighters[side] {
+            if let tokens = highlighter.tokens(line: line) {
+                for token in tokens where token.range.lowerBound < length {
+                    let range = NSRange(location: token.range.lowerBound, length: min(token.range.upperBound, length) - token.range.lowerBound)
+                    shown.addAttribute(.foregroundColor, value: Palette.syntax(token.kind), range: range)
+                }
+            } else {
+                requestHighlighting()
+            }
+        }
         if let segments {
             let wordColor = side == .left ? Palette.removedWord : Palette.addedWord
             var location = 0

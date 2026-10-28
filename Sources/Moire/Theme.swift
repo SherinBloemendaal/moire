@@ -1,4 +1,5 @@
 import AppKit
+import MoireKit
 import SwiftUI
 
 extension Color {
@@ -78,6 +79,30 @@ enum Palette {
     static let searchMatch = NSColor.dynamic(light: 0xFACC15, dark: 0xFACC15, lightAlpha: 0.45, darkAlpha: 0.32)
     static let currentMatch = NSColor.dynamic(light: 0xF59E0B, dark: 0xF59E0B, lightAlpha: 0.85, darkAlpha: 0.7)
     static let flash = NSColor.dynamic(light: 0x7C5CFF, dark: 0x7C5CFF, lightAlpha: 0.16, darkAlpha: 0.24)
+
+    /// Syntax colors are text colors only, never backgrounds, so the marked words of a change
+    /// always show. None of them is the red or green of removed and added lines.
+    static func syntax(_ kind: SyntaxKind) -> NSColor {
+        switch kind {
+        case .keyword, .markup: keyword
+        case .type: type
+        case .string: string
+        case .number: number
+        case .comment: comment
+        case .tag: tag
+        case .attribute: attribute
+        case .variable: variable
+        }
+    }
+
+    private static let keyword = NSColor.dynamic(light: 0x9D2BB5, dark: 0xE38AF5)
+    private static let type = NSColor.dynamic(light: 0x0E7490, dark: 0x5EDCEC)
+    private static let string = NSColor.dynamic(light: 0x9A5800, dark: 0xF2BE6C)
+    private static let number = NSColor.dynamic(light: 0x1D4ED8, dark: 0x93B4FF)
+    private static let comment = NSColor.dynamic(light: 0x737889, dark: 0x7E849C)
+    private static let tag = NSColor.dynamic(light: 0x4F46E5, dark: 0xA5B4FC)
+    private static let attribute = NSColor.dynamic(light: 0xA3420F, dark: 0xFDA77A)
+    private static let variable = NSColor.dynamic(light: 0x0369A1, dark: 0x7DD3FC)
 }
 
 /// Two sets of rings drifting over each other: the moiré that gives the app its name.
