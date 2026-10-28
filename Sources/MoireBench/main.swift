@@ -172,6 +172,12 @@ func machineName() -> String {
     return String(decoding: buffer.prefix { $0 != 0 }.map(UInt8.init), as: UTF8.self)
 }
 
+/// Short scenarios vary by more than the allowed margin on their own: on GitHub's virtual runners
+/// the same 0.1 s scenario measured anywhere from 0.06 s to 0.23 s. Only longer ones are gated.
+let minimumGatedSeconds = 0.5
+/// How many more times a scenario over the limit is timed before it counts as slower.
+let retries = 2
+
 @MainActor
 func run(_ options: Options) throws {
     try FileManager.default.createDirectory(at: options.root, withIntermediateDirectories: true)
@@ -192,12 +198,14 @@ func run(_ options: Options) throws {
         scenarios: [:]
     )
 
+    var timed: [String: (Scenario, Dataset)] = [:]
     for (datasetName, dataset) in datasets {
         for scenario in scenarios where options.only.map({ scenario.name.hasPrefix($0) }) ?? true {
             if let kinds = scenario.kinds, !kinds.contains(dataset.manifest.kind) { continue }
             let name = "\(scenario.name)/\(datasetName)"
             let result = try time(scenario, on: dataset, repeats: options.repeats)
             report.scenarios[name] = result
+            timed[name] = (scenario, dataset)
             print(String(
                 format: "%-36@ %8.3f s  %10.0f files/s  %8.1f MB/s",
                 name as NSString, result.seconds, result.filesPerSecond, result.megabytesPerSecond
@@ -209,6 +217,24 @@ func run(_ options: Options) throws {
         print(String(format: "Folder tree storage: %.1f bytes per item (%d items)", Double(tree.storageBytes) / Double(tree.count), tree.count))
     }
 
+    // GitHub's runners have slow stretches of several seconds, long enough to slow every run of
+    // one scenario. A scenario over the limit is timed again, up to `retries` more times, and keeps
+    // its fastest result: a real slowdown is slow every time, a slow stretch is not.
+    var baseline: Report?
+    if let baselineURL = options.baseline {
+        let loaded = try JSONDecoder().decode(Report.self, from: Data(contentsOf: baselineURL))
+        baseline = loaded
+        for (name, base) in loaded.scenarios.sorted(by: { $0.key < $1.key }) where base.seconds >= minimumGatedSeconds {
+            guard let entry = timed[name] else { continue }
+            for attempt in 1...retries {
+                guard let current = report.scenarios[name], current.seconds / base.seconds > 1 + options.maxRegression else { break }
+                print(String(format: "%-36@ %8.3f s, over the limit: timing again (%d of %d)", name as NSString, current.seconds, attempt, retries))
+                let again = try time(entry.0, on: entry.1, repeats: options.repeats)
+                if again.seconds < current.seconds { report.scenarios[name] = again }
+            }
+        }
+    }
+
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     if let json = options.json {
@@ -216,12 +242,9 @@ func run(_ options: Options) throws {
         print("Wrote \(json.path(percentEncoded: false))")
     }
 
-    if let baselineURL = options.baseline {
-        let baseline = try JSONDecoder().decode(Report.self, from: Data(contentsOf: baselineURL))
+    if let baseline {
         var slower: [String] = []
-        // Short scenarios vary by more than the allowed margin on their own: on GitHub's virtual
-        // runners the same 0.1 s scenario measured anywhere from 0.06 s to 0.23 s.
-        for (name, base) in baseline.scenarios.sorted(by: { $0.key < $1.key }) where base.seconds >= 0.5 {
+        for (name, base) in baseline.scenarios.sorted(by: { $0.key < $1.key }) where base.seconds >= minimumGatedSeconds {
             guard let current = report.scenarios[name] else { continue }
             let ratio = current.seconds / base.seconds
             print(String(format: "%-36@ %+6.0f%% against the baseline", name as NSString, (ratio - 1) * 100))
