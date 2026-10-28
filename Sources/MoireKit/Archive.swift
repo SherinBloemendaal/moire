@@ -34,6 +34,8 @@ public enum ArchiveExtractor {
         /// link or over another entry.
         case unsafeEntry(String)
         case toolFailed(tool: String, message: String)
+        /// Unpacked, the archive would not fit in the space that is left (a "zip bomb", or just big).
+        case tooLarge(needed: Int64, available: Int64)
 
         public var errorDescription: String? {
             switch self {
@@ -41,6 +43,9 @@ public enum ArchiveExtractor {
                 "The archive was not opened because the entry “\(name)” would be written outside its folder."
             case .toolFailed(let tool, let message):
                 message.isEmpty ? "\(tool) could not unpack the archive." : "\(tool) could not unpack the archive: \(message)"
+            case let .tooLarge(needed, available):
+                "The archive was not opened: unpacked it takes \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)), "
+                    + "and only \(ByteCountFormatter.string(fromByteCount: available, countStyle: .file)) is free for it."
             }
         }
     }
@@ -52,8 +57,15 @@ public enum ArchiveExtractor {
 
     /// Lists the entries, checks them, and unpacks the archive into a new folder inside `parent`.
     /// Cancelling the task stops the tool and removes what was unpacked so far.
-    public static func extract(_ archive: URL, format: ArchiveFormat, into parent: URL = defaultParent) async throws -> ExtractedArchive {
+    ///
+    /// An archive that would take more than `limit` bytes unpacked is refused before anything is
+    /// written. By default the limit is the free space on the disk of `parent`, less 1 GB.
+    public static func extract(_ archive: URL, format: ArchiveFormat, into parent: URL = defaultParent, limit: Int64? = nil) async throws -> ExtractedArchive {
         try validate(try await entries(of: archive, format: format), format: format)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let available = try limit ?? freeSpace(at: parent)
+        let needed = try await uncompressedSize(of: archive, format: format)
+        guard needed <= available else { throw Failure.tooLarge(needed: needed, available: max(0, available)) }
 
         let root = parent.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let folder = root.appending(path: folderName(for: archive), directoryHint: .isDirectory)
@@ -83,6 +95,34 @@ public enum ArchiveExtractor {
         case .tar, .tarGzip, .tarBzip2, .tarXz: try await run("/usr/bin/tar", ["-t", "-f", path])
         }
         return String(decoding: output, as: UTF8.self).split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    }
+
+    /// The size of all entries once unpacked, as the archive states it. For tar this reads the
+    /// whole archive (decompressing it in memory, writing nothing).
+    public static func uncompressedSize(of archive: URL, format: ArchiveFormat) async throws -> Int64 {
+        let path = archive.path(percentEncoded: false)
+        switch format {
+        case .zip:
+            // "3 files, 10485760 bytes uncompressed, 10196 bytes compressed:  99.9%"
+            let output = String(decoding: try await run("/usr/bin/zipinfo", ["-t", path], allowedStatus: [0, 1]), as: UTF8.self)
+            let words = output.split(whereSeparator: \.isWhitespace)
+            guard let index = words.firstIndex(where: { $0.hasPrefix("bytes") }), index > 0, let size = Int64(words[index - 1]) else {
+                return 0
+            }
+            return size
+        case .tar, .tarGzip, .tarBzip2, .tarXz:
+            // "-rw-r--r--  0 me staff  10485760 Oct 27 21:00 name": the fifth column is the size.
+            let output = String(decoding: try await run("/usr/bin/tar", ["-t", "-v", "-f", path]), as: UTF8.self)
+            return output.split(separator: "\n").reduce(Int64(0)) { total, line in
+                let columns = line.split(whereSeparator: \.isWhitespace)
+                return total + (columns.count > 4 ? Int64(columns[4]) ?? 0 : 0)
+            }
+        }
+    }
+
+    static func freeSpace(at folder: URL) throws -> Int64 {
+        let values = try folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return (values.volumeAvailableCapacityForImportantUsage ?? 0) - (1 << 30)
     }
 
     /// Refuses absolute paths and `..` parts. For zip, which `ditto` unpacks, it also refuses an

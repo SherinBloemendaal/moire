@@ -172,4 +172,27 @@ private func contents(_ url: URL) throws -> String {
         #expect(ArchiveExtractor.folderName(for: URL(filePath: "/x/app.jar")) == "app")
         #expect(ArchiveExtractor.folderName(for: URL(filePath: "/x/.tar")) == "Archive")
     }
+
+    @Test(arguments: [(ArchiveFormat.zip, "big.zip"), (.tarGzip, "big.tar.gz")])
+    func `measures the unpacked size and refuses what does not fit`(format: ArchiveFormat, name: String) async throws {
+        let workspace = try Workspace()
+        defer { workspace.remove() }
+        // 8 MB of zeros packs into a few KB: the shape of a zip bomb, in small.
+        try Data(count: 8 << 20).write(to: workspace.source.appending(path: "zeros.bin"))
+        let archive = workspace.base.appending(path: name)
+        let packed = format == .zip
+            ? try shell("/usr/bin/ditto", ["-c", "-k", workspace.source.path, archive.path], in: workspace.base)
+            : try shell("/usr/bin/tar", ["-c", "-z", "-f", archive.path, "-C", workspace.source.path, "."], in: workspace.base)
+        #expect(packed == 0)
+
+        let size = try await ArchiveExtractor.uncompressedSize(of: archive, format: format)
+        #expect(size >= 8 << 20 && size < (8 << 20) + 1024)
+
+        await #expect(throws: ArchiveExtractor.Failure.tooLarge(needed: size, available: 1 << 20)) {
+            try await ArchiveExtractor.extract(archive, format: format, into: workspace.parent, limit: 1 << 20)
+        }
+        // Refused before anything was written.
+        #expect(workspace.unpackedFolders.isEmpty)
+        _ = try await ArchiveExtractor.extract(archive, format: format, into: workspace.parent, limit: 64 << 20)
+    }
 }
