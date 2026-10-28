@@ -28,10 +28,8 @@ final class Windows {
     var opener: ((WindowRequest) -> Void)?
     /// Where a new tab goes: the window that was in front when it was asked for.
     private weak var tabParent: NSWindow?
-    /// Files that arrived before any window existed (at launch).
+    /// Work that arrived before any window existed (at launch): files to open, a merge to show.
     private var pending: [(AppState) -> Void] = []
-    /// The same files, so a window can be made for them when none appears.
-    private var pendingURLs: [URL] = []
 
     /// A stand-in for the menus while no window is open, so they show disabled instead of failing.
     let placeholder = AppState()
@@ -64,15 +62,17 @@ final class Windows {
         opener = { openWindow(value: $0) }
     }
 
-    /// Launched to open files, macOS shows no window on its own (unless it restores some), so
-    /// the files would wait forever. Shortly after launch, files still waiting get a window.
-    func openWindowForWaitingFiles() {
-        guard frontmost == nil, !pendingURLs.isEmpty, let opener else { return }
-        let urls = pendingURLs
-        pending = []
-        pendingURLs = []
-        opener(WindowRequest(urls: urls))
+    /// Launched to open files or a merge, macOS shows no window on its own (unless it restores
+    /// some), so the work would wait forever. Shortly after launch, waiting work gets a window,
+    /// which takes it over when it registers.
+    func openWindowForWaitingWork() {
+        guard frontmost == nil, !pending.isEmpty, !isOpeningForWaitingWork, let opener else { return }
+        // Asked from more than one place at launch; the window takes a moment to register.
+        isOpeningForWaitingWork = true
+        opener(WindowRequest())
     }
+
+    private var isOpeningForWaitingWork = false
 
     func register(_ state: AppState, openWindow: OpenWindowAction) {
         register(state) { openWindow(value: $0) }
@@ -85,7 +85,7 @@ final class Windows {
         focus(state)
         let waiting = pending
         pending = []
-        pendingURLs = []
+        isOpeningForWaitingWork = false
         for action in waiting { action(state) }
     }
 
@@ -138,7 +138,6 @@ final class Windows {
         guard let frontmost else {
             // At launch the first window may still be on its way; the files wait for it.
             pending.append { $0.open(urls) }
-            pendingURLs += urls
             return
         }
         if frontmost.isEmpty {

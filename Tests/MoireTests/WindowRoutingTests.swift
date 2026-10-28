@@ -64,3 +64,25 @@ struct WindowRoutingTests {
         #expect(!state.isEmpty)
     }
 }
+
+@MainActor
+struct WaitingWorkTests {
+    @Test func `waiting work gets exactly one window, however often it is asked`() {
+        let windows = Windows(observesFocus: false)
+        var opened = 0
+        // The menus hand over the opener at launch; no window exists yet.
+        windows.opener = { _ in opened += 1 }
+        windows.withFrontmost { _ in }
+        windows.openWindowForWaitingWork()
+        windows.openWindowForWaitingWork()
+        #expect(opened == 1)
+
+        var ran = false
+        windows.withFrontmost { _ in ran = true }
+        windows.register(AppState()) { _ in opened += 1 }
+        #expect(ran)
+        // Nothing waits any more: no further windows.
+        windows.openWindowForWaitingWork()
+        #expect(opened == 1)
+    }
+}

@@ -152,6 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ArchiveExtractor.removeLeftovers(in: downloads)
         }
         let arguments = Array(CommandLine.arguments.dropFirst())
+        // Whatever waits for a window (files, a merge) gets one shortly after launch if macOS
+        // shows none, which it does not when launched to open something.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingWork() }
         if let flag = arguments.firstIndex(of: "--merge") {
             openMergetool(Array(arguments[(flag + 1)...]))
             return
@@ -163,13 +166,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
         if !urls.isEmpty { Windows.shared.open(urls) }
-        // Files from Finder arrive through application(_:open:) around the same time.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingFiles() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         Windows.shared.open(urls)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingFiles() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingWork() }
     }
 
     /// `Moire --merge BASE LOCAL REMOTE MERGED`, the way `git mergetool` passes the files.
@@ -179,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(2)
         }
         let urls = paths.prefix(4).map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
+        isMergetool = true
         Windows.shared.withFrontmost { [self] state in
             state.merge.openMergetool(base: urls[0], left: urls[1], right: urls[2], output: urls[3])
             state.mode = .merge
@@ -238,12 +240,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Held here, not only by its window: closing the window ends the app, and the exit status
     /// still has to tell git whether the merge was saved.
     private var mergetool: MergeModel?
+    /// Started by git mergetool. Until a save says otherwise, the merge is not done.
+    private var isMergetool = false
 
     func applicationWillTerminate(_ notification: Notification) {
         for state in Windows.shared.states { state.archives.removeAll() }
-        // git mergetool with `trustExitCode` reads a failure as "not merged yet".
-        guard let mergetool, mergetool.exitStatus != 0 else { return }
-        exit(mergetool.exitStatus)
+        // git mergetool with `trustExitCode` reads a failure as "not merged yet". Quitting before
+        // the merge was even shown is a failure too.
+        guard isMergetool else { return }
+        let status = mergetool?.exitStatus ?? 1
+        if status != 0 { exit(status) }
     }
 }
 
