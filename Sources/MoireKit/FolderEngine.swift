@@ -61,19 +61,63 @@ public struct FolderCompareSettings: Sendable, Hashable {
     }
 }
 
+/// How far a running comparison is.
+public struct FolderProgress: Sendable, Hashable {
+    public var foldersListed: Int
+    public var itemsFound: Int
+    /// Files whose contents have to be read, and how many of them are done.
+    public var filesToRead: Int
+    public var filesRead: Int
+    public var bytesToRead: Int64
+    public var bytesRead: Int64
+}
+
 /// Compares two folder trees on many threads.
+///
+/// `run()` blocks until the comparison is done. While it runs, other threads can call
+/// `snapshot()` and `progress` to show results as they come in, and `cancel()` to stop it.
 public final class FolderEngine: Sendable {
     public let left: URL
     public let right: URL
     public let settings: FolderCompareSettings
+    /// Results of earlier runs. Pairs found here are not read again; new results are added.
+    public let cache: ResultCache?
 
     private let tree = Mutex(FolderTree())
     private let cancelled = Atomic<Bool>(false)
+    private let foldersListed = Atomic<Int>(0)
+    private let itemsFound = Atomic<Int>(0)
+    private let filesToRead = Atomic<Int>(0)
+    private let filesRead = Atomic<Int>(0)
+    private let bytesToRead = Atomic<Int64>(0)
+    private let bytesRead = Atomic<Int64>(0)
 
-    public init(left: URL, right: URL, settings: FolderCompareSettings = FolderCompareSettings()) {
+    public var progress: FolderProgress {
+        FolderProgress(
+            foldersListed: foldersListed.load(ordering: .relaxed),
+            itemsFound: itemsFound.load(ordering: .relaxed),
+            filesToRead: filesToRead.load(ordering: .relaxed),
+            filesRead: filesRead.load(ordering: .relaxed),
+            bytesToRead: bytesToRead.load(ordering: .relaxed),
+            bytesRead: bytesRead.load(ordering: .relaxed)
+        )
+    }
+
+    /// The tree as far as it is known right now, with folder statuses worked out (`.pending`
+    /// where something inside is still open). Copying is cheap, but the next change the engine
+    /// makes copies the arrays once, so call this a few times a second, not in a tight loop.
+    public func snapshot() -> FolderTree {
+        var copy = tree.withLock { $0 }
+        copy.settleFolders()
+        return copy
+    }
+
+    public init(left: URL, right: URL, settings: FolderCompareSettings = FolderCompareSettings(), cache: ResultCache? = nil) {
         self.left = left
         self.right = right
         self.settings = settings
+        // Metadata never reads contents, so there is nothing to remember.
+        self.cache = settings.method == .metadata ? nil : cache
     }
 
     /// Stops a running comparison soon. `run()` then throws `CancellationError`.
@@ -182,15 +226,34 @@ public final class FolderEngine: Sendable {
             return
         }
 
-        let children = pair(leftEntries, rightEntries, job: job)
-        let first = tree.withLock { $0.appendChildren(children, to: job.item) }
+        var children = pair(leftEntries, rightEntries, job: job)
+        var cachedLines: [(offset: Int, lines: Int)] = []
+        if let cache {
+            for offset in children.indices where children[offset].status == .pending && children[offset].left.kind == .file && children[offset].right.kind == .file {
+                switch cache.lookup(left: children[offset].left, right: children[offset].right) {
+                case .identical: children[offset].status = .identical
+                case .different: children[offset].status = .different
+                case .differentLines(let lines):
+                    children[offset].status = .different
+                    cachedLines.append((offset, lines))
+                case nil: break
+                }
+            }
+        }
+        let first = tree.withLock { tree in
+            let first = tree.appendChildren(children, to: job.item)
+            for (offset, lines) in cachedLines { tree.changedLines[first + Int32(offset)] = lines }
+            return first
+        }
+        foldersListed.add(1, ordering: .relaxed)
+        itemsFound.add(children.count, ordering: .relaxed)
 
         var folders: [FolderJob] = []
         var contents: [ContentJob] = []
         for (offset, child) in children.enumerated() where child.status == .pending {
             let item = first + Int32(offset)
             if child.left.kind == .file, child.right.kind == .file, let left = job.left, let right = job.right {
-                contents.append(ContentJob(item: item, left: left + "/" + child.name, right: right + "/" + child.name, size: child.left.size))
+                contents.append(ContentJob(item: item, left: left + "/" + child.name, right: right + "/" + child.name, leftInfo: child.left, rightInfo: child.right))
                 continue
             }
             let isFolder = (child.left.kind == .directory || !child.left.exists) && (child.right.kind == .directory || !child.right.exists)
@@ -200,6 +263,10 @@ public final class FolderEngine: Sendable {
                 left: child.left.exists ? job.left.map { $0 + "/" + child.name } : nil,
                 right: child.right.exists ? job.right.map { $0 + "/" + child.name } : nil
             ))
+        }
+        if !contents.isEmpty {
+            filesToRead.add(contents.count, ordering: .relaxed)
+            bytesToRead.add(contents.reduce(0) { $0 + bytesRead(for: $1) }, ordering: .relaxed)
         }
         let current = pools.withLock { $0 }
         // Reversed, so a pool (which takes the last job first) works in list order.
@@ -219,7 +286,16 @@ public final class FolderEngine: Sendable {
         let item: Int32
         let left: String
         let right: String
-        let size: Int64
+        let leftInfo: FolderTree.SideInfo
+        let rightInfo: FolderTree.SideInfo
+
+        var size: Int64 { leftInfo.size }
+    }
+
+    /// What a job reads from both files together, at most.
+    private func bytesRead(for job: ContentJob) -> Int64 {
+        let window = Int64(ContentComparer.quickWindow * 2)
+        return settings.method == .quick && job.size > window ? window * 2 : job.size * 2
     }
 
     private func compare(_ job: ContentJob) {
@@ -227,8 +303,18 @@ public final class FolderEngine: Sendable {
             stopPools()
             return
         }
+        defer {
+            filesRead.add(1, ordering: .relaxed)
+            bytesRead.add(bytesRead(for: job), ordering: .relaxed)
+        }
         do {
             let verdict = try ContentComparer.compare(job.left, job.right, size: job.size, method: settings.method, options: settings.diffOptions)
+            let remembered: ResultCache.Verdict = switch verdict {
+            case .identical: .identical
+            case .different: .different
+            case .differentLines(let lines): .differentLines(lines)
+            }
+            cache?.record(left: job.leftInfo, right: job.rightInfo, verdict: remembered)
             tree.withLock { tree in
                 switch verdict {
                 case .identical:

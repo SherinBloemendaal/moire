@@ -288,3 +288,132 @@ struct FolderEngineContentTests {
         #expect(tree.differenceCount == legacy.differenceCount)
     }
 }
+
+struct FolderEngineProgressTests {
+    private func bigTree(changed: Bool) throws -> URL {
+        var files: [String: String] = [:]
+        for index in 0..<3000 { files["d\(index % 40)/e\(index % 7)/f\(index).txt"] = changed && index % 11 == 0 ? "changed \(index)" : "file \(index)" }
+        return try makeTree(files)
+    }
+
+    @Test func `counts every folder, item and file it reads`() throws {
+        let left = try bigTree(changed: false)
+        let right = try bigTree(changed: true)
+        let engine = FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary))
+        let tree = try engine.run()
+        let progress = engine.progress
+
+        #expect(progress.itemsFound == tree.count - 1)
+        #expect(progress.foldersListed == (1..<tree.count).count { tree.isDirectory($0) } + 1)
+        #expect(progress.filesRead == progress.filesToRead)
+        #expect(progress.bytesRead == progress.bytesToRead)
+        #expect(progress.filesToRead > 0)
+    }
+
+    @Test func `shows consistent snapshots while it runs`() async throws {
+        let left = try bigTree(changed: false)
+        let right = try bigTree(changed: true)
+        let engine = FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary, folderThreads: 1, contentThreads: 1))
+        let running = Task.detached { try engine.run() }
+
+        var sawPending = false
+        for _ in 0..<200 {
+            let snapshot = engine.snapshot()
+            for item in 0..<snapshot.count where snapshot.isDirectory(item) && snapshot.status(of: item) == .pending {
+                sawPending = true
+            }
+            // A folder is never called identical while something inside it is still open.
+            for item in 0..<snapshot.count where snapshot.status(of: item) == .pending {
+                var parent = snapshot.parent(of: item)
+                while let current = parent {
+                    #expect(snapshot.status(of: current) != .identical)
+                    parent = snapshot.parent(of: current)
+                }
+            }
+            if snapshot.status(of: 0) != .pending { break }
+        }
+
+        let final = try await running.value
+        #expect(engine.snapshot().differenceCount == final.differenceCount)
+        #expect((0..<final.count).allSatisfy { final.status(of: $0) != .pending })
+        _ = sawPending
+    }
+}
+
+struct ResultCacheTests {
+    private func cacheFile() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "moire-cache-\(UUID().uuidString).cache")
+    }
+
+    @Test func `reuses results without reading unchanged files again`() throws {
+        let left = try makeTree(["same.txt": "same", "other.txt": "a"], dates: ["same.txt": fixed, "other.txt": fixed])
+        let right = try makeTree(["same.txt": "same", "other.txt": "b"], dates: ["same.txt": fixed, "other.txt": fixed])
+        let file = cacheFile()
+        let first = ResultCache(file: file)
+        _ = try FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary), cache: first).run()
+        try first.save()
+
+        // Unreadable now, but size and date are unchanged: the cached answer is used, so no read happens.
+        let locked = left.appending(path: "same.txt").path(percentEncoded: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked) }
+
+        let second = ResultCache(file: file)
+        #expect(second.count == 2)
+        let engine = FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary), cache: second)
+        #expect(try statuses(engine.run()) == ["same.txt": .identical, "other.txt": .different])
+        #expect(engine.progress.filesToRead == 0)
+    }
+
+    @Test func `reads a file again once its size or date changed`() throws {
+        let left = try makeTree(["a.txt": "same"], dates: ["a.txt": fixed])
+        let right = try makeTree(["a.txt": "same"], dates: ["a.txt": fixed])
+        let file = cacheFile()
+        let first = ResultCache(file: file)
+        _ = try FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary), cache: first).run()
+        try first.save()
+
+        try Data("diff".utf8).write(to: right.appending(path: "a.txt"))
+        let engine = FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary), cache: ResultCache(file: file))
+        #expect(try statuses(engine.run()) == ["a.txt": .different])
+        #expect(engine.progress.filesToRead == 1)
+    }
+
+    @Test func `keeps the changed line count`() throws {
+        let left = try makeTree(["a.txt": "one\ntwo\n"])
+        let right = try makeTree(["a.txt": "one\nthree\nfour\n"])
+        let file = cacheFile()
+        let first = ResultCache(file: file)
+        _ = try FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .lines), cache: first).run()
+        try first.save()
+        let tree = try FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .lines), cache: ResultCache(file: file)).run()
+        #expect(tree.changedLines(of: 1) == 2)
+    }
+
+    @Test func `round trips its file and ignores a damaged one`() throws {
+        let entries: [ResultCache.Key: ResultCache.Entry] = [
+            .init(left: 1, right: 2): .init(leftSize: 10, leftModified: -5, rightSize: 11, rightModified: 1 << 60, verdict: .identical),
+            .init(left: 3, right: 4): .init(leftSize: 0, leftModified: 0, rightSize: 0, rightModified: 0, verdict: .differentLines(7)),
+        ]
+        let data = ResultCache.encode(entries)
+        #expect(ResultCache.decode(data) == entries)
+        #expect(ResultCache.decode(data.dropLast()) == nil)
+        #expect(ResultCache.decode(Data("not a cache".utf8)) == nil)
+
+        let file = cacheFile()
+        try Data("garbage".utf8).write(to: file)
+        #expect(ResultCache(file: file).count == 0)
+    }
+
+    @Test func `uses one file per pair of folders and way of comparing`() {
+        let a = URL(filePath: "/a"), b = URL(filePath: "/b")
+        let binary = ResultCache.file(left: a, right: b, settings: FolderCompareSettings(method: .binary))
+        #expect(binary == ResultCache.file(left: a, right: b, settings: FolderCompareSettings(method: .binary)))
+        #expect(binary != ResultCache.file(left: b, right: a, settings: FolderCompareSettings(method: .binary)))
+        #expect(binary != ResultCache.file(left: a, right: b, settings: FolderCompareSettings(method: .quick)))
+        #expect(
+            ResultCache.file(left: a, right: b, settings: FolderCompareSettings(method: .lines))
+                != ResultCache.file(left: a, right: b, settings: FolderCompareSettings(method: .lines, diffOptions: DiffOptions(ignoreCase: true)))
+        )
+    }
+}

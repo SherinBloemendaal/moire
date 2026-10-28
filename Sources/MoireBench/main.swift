@@ -132,6 +132,14 @@ let scenarios: [Scenario] = [
     Scenario(name: "engine.quick", expected: quickExpected, compare: engine(.quick)),
     Scenario(name: "engine.binary", compare: engine(.binary)),
     Scenario(name: "engine.lines", kinds: ["tree"], compare: engine(.lines)),
+    // A second comparison of the same folders: the untimed first run fills the cache, every
+    // timed run loads it, reads only what is not in it, and saves it again.
+    Scenario(name: "engine.binary.cached", compare: { dataset in
+        let cache = ResultCache(file: dataset.root.appending(path: "binary.cache"))
+        let found = try FolderEngine(left: dataset.left, right: dataset.right, settings: FolderCompareSettings(method: .binary), cache: cache).run().differenceCount
+        try cache.save()
+        return found
+    }),
 ]
 
 func time(_ scenario: Scenario, on dataset: Dataset, repeats: Int) throws -> Report.Scenario {

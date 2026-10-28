@@ -62,6 +62,8 @@ public struct FolderTree: Sendable {
     var leftIDs: [UInt64] = [0]
     var rightIDs: [UInt64] = [0]
     var statuses: [Status] = [.pending]
+    /// Whether a folder's contents have been read. Files are always listed.
+    var listed: [Bool] = [false]
     /// Only for the few items that need it: lines changed (line by line) and read errors.
     var changedLines: [Int32: Int] = [:]
     var errors: [Int32: String] = [:]
@@ -143,6 +145,7 @@ public struct FolderTree: Sendable {
         let first = Int32(count)
         firstChild[Int(parent)] = first
         childCount[Int(parent)] = Int32(children.count)
+        listed[Int(parent)] = true
         for child in children {
             parents.append(parent)
             firstChild.append(0)
@@ -160,30 +163,45 @@ public struct FolderTree: Sendable {
             leftIDs.append(child.left.fileID)
             rightIDs.append(child.right.fileID)
             statuses.append(child.status)
+            let isFolder = (child.left.kind == .directory || child.left.kind == .absent) && (child.right.kind == .directory || child.right.kind == .absent)
+            listed.append(!isFolder)
         }
         return first
     }
 
-    /// Gives every folder found on both sides the status of what is inside it. Children come
-    /// after their parent, so one pass from the end settles every folder.
+    /// Gives every folder the status of what is inside it. Children come after their parent, so
+    /// one pass from the end settles every folder.
+    ///
+    /// While a comparison is still running, a folder is `.different` as soon as one item inside
+    /// it is known to differ, `.pending` while anything inside it is still open (or it has not
+    /// been listed yet), and `.identical` only when everything inside it is done and the same.
     mutating func settleFolders() {
         var differs = [Bool](repeating: false, count: count)
+        var open = [Bool](repeating: false, count: count)
         for item in stride(from: count - 1, through: 1, by: -1) {
-            let status = statuses[item]
-            if isDirectory(item), status != .unreadable {
+            if isDirectory(item), statuses[item] != .unreadable {
                 if leftKinds[item] == .absent {
-                    statuses[item] = .rightOnly
+                    statuses[item] = open[item] || !listed[item] ? .pending : .rightOnly
                 } else if rightKinds[item] == .absent {
-                    statuses[item] = .leftOnly
+                    statuses[item] = open[item] || !listed[item] ? .pending : .leftOnly
+                } else if differs[item] {
+                    statuses[item] = .different
                 } else {
-                    statuses[item] = differs[item] ? .different : .identical
+                    statuses[item] = open[item] || !listed[item] ? .pending : .identical
                 }
             }
-            if statuses[item] != .identical {
-                differs[Int(parents[item])] = true
+            let parent = Int(parents[item])
+            switch statuses[item] {
+            case .identical: break
+            case .pending: open[parent] = true
+            // A folder that exists on one side only differs, even while its contents are still being listed.
+            case .different, .leftOnly, .rightOnly, .unreadable: differs[parent] = true
+            }
+            if isDirectory(item), leftKinds[item] == .absent || rightKinds[item] == .absent {
+                differs[parent] = true
             }
         }
-        statuses[0] = differs[0] ? .different : .identical
+        statuses[0] = differs[0] ? .different : (open[0] || !listed[0] ? .pending : .identical)
     }
 
     struct Child {
