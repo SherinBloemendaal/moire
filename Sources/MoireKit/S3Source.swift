@@ -39,19 +39,25 @@ public final class S3Source: FolderSource {
                 guard common.hasPrefix(folder) else { continue }
                 let name = String(common.dropFirst(folder.count).dropLast())
                 // `a//b` has an empty folder name in it, which no file system can show.
-                guard !name.isEmpty, !name.contains("/"), !(skipHidden && name.hasPrefix(".")) else { continue }
+                guard Self.isUsable(name), !(skipHidden && name.hasPrefix(".")) else { continue }
                 entries.append(DirectoryEntry(name: name, kind: .directory, size: 0, modified: 0, fileID: 0))
             }
             for object in page.objects {
                 guard object.key.hasPrefix(folder) else { continue }
                 let name = String(object.key.dropFirst(folder.count))
-                // The empty object some tools create to mark a folder.
-                guard !name.isEmpty, !(skipHidden && name.hasPrefix(".")) else { continue }
+                // Empty: the object some tools create to mark a folder.
+                guard Self.isUsable(name), !(skipHidden && name.hasPrefix(".")) else { continue }
                 entries.append(DirectoryEntry(name: name, kind: .file, size: object.size, modified: object.modified, fileID: 0))
             }
             continuation = page.nextContinuation
         } while continuation != nil
         return entries
+    }
+
+    /// A key part that can be a name in a folder: not empty, no `/`, and not `.` or `..`, which
+    /// would point somewhere else once used in a path.
+    static func isUsable(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && name != "." && name != ".."
     }
 
     public func open(_ path: String) throws -> any ReadableFile {
