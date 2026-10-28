@@ -67,3 +67,5 @@ xattr -dr com.apple.quarantine "$destination/Moire.app" 2>/dev/null || true
 installed="$(defaults read "$destination/Moire.app/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "$version")"
 echo "Installed Moire $installed to $destination/Moire.app"
 echo "Open it with: open \"$destination/Moire.app\""
+echo "Command line tool: link it into your PATH to use it as moire, for example:"
+echo "  ln -sf \"$destination/Moire.app/Contents/Helpers/moire\" /usr/local/bin/moire"
