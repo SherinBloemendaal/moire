@@ -119,4 +119,13 @@ struct ReadOnlyTests {
         #expect(!model.right.isReadOnly)
     }
 
+    @Test func `does not remember temporary copies as recent comparisons`() {
+        let recents = RecentSessions()
+        let before = recents.sessions
+        let temporary = FolderModel.downloads.appending(path: "x/a.txt").path(percentEncoded: false)
+        recents.note(ComparisonSession(kind: .text, left: temporary, right: "/Users/me/a.txt"))
+        let archive = ArchiveExtractor.defaultParent.appending(path: "x/app").path(percentEncoded: false)
+        recents.note(ComparisonSession(kind: .folders, left: archive, right: "/Users/me/app"))
+        #expect(recents.sessions == before)
+    }
 }
