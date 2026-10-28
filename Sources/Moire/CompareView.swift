@@ -282,18 +282,21 @@ private struct StatusBar: View {
 private struct BinaryComparisonView: View {
     let left: Side
     let right: Side
+    /// Worked out off the main thread: big files are compared from disk, in pieces.
+    @State private var identical: Bool?
 
     var body: some View {
-        let identical = switch (left.content, right.content) {
-        case (.binary(let a), .binary(let b)): a == b
-        default: false
-        }
         VStack(spacing: 14) {
-            Image(systemName: identical ? "checkmark.seal.fill" : "doc.zipper")
-                .font(.system(size: 40))
-                .foregroundStyle(Theme.brand)
-            Text(identical ? "The files are identical" : "The files differ")
-                .font(.title2.weight(.semibold))
+            if let identical {
+                Image(systemName: identical ? "checkmark.seal.fill" : "doc.zipper")
+                    .font(.system(size: 40))
+                    .foregroundStyle(Theme.brand)
+                Text(identical ? "The files are identical" : "The files differ")
+                    .font(.title2.weight(.semibold))
+            } else {
+                ProgressView().controlSize(.large)
+                Text("Comparing the bytes…").font(.title2.weight(.semibold))
+            }
             Text("At least one side is not a text file, so Moire compares the bytes only.")
                 .foregroundStyle(.secondary)
             HStack(spacing: 24) {
@@ -302,13 +305,31 @@ private struct BinaryComparisonView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: [left.revision, right.revision]) {
+            identical = nil
+            identical = await Self.compare(left, right)
+        }
+    }
+
+    private static func compare(_ left: Side, _ right: Side) async -> Bool {
+        let (leftSize, rightSize) = (byteCount(left), byteCount(right))
+        guard leftSize == rightSize else { return false }
+        if case .binary(_, let a?) = left.content, case .binary(_, let b?) = right.content { return a == b }
+        guard let leftURL = left.url, let rightURL = right.url, !left.isDirty, !right.isDirty else { return false }
+        return await Task.detached(priority: .userInitiated) {
+            (try? FileContent.sameBytes(leftURL, rightURL)) ?? false
+        }.value
+    }
+
+    private static func byteCount(_ side: Side) -> Int64 {
+        switch side.content {
+        case .binary(let size, _): size
+        case .text(let document): Int64(document.utf8.count)
+        }
     }
 
     private func size(of side: Side, label: String) -> some View {
-        let bytes: Int64 = switch side.content {
-        case .binary(let data): Int64(data.count)
-        case .text(let document): Int64(document.utf8.count)
-        }
+        let bytes = Self.byteCount(side)
         return VStack(spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.system(.body, design: .monospaced))

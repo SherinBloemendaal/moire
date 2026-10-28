@@ -68,6 +68,27 @@ public final class FileByteSource: ByteSource {
         return result
     }
 
+    /// `pread` straight into the page. `FileHandle.read` returns autoreleased data, which a
+    /// background loop over a big file would pile up until the loop ends.
+    private func readPage(at offset: Int) throws -> [UInt8] {
+        let wanted = min(pageSize, count - offset)
+        guard wanted > 0 else { return [] }
+        let descriptor = handle.fileDescriptor
+        return try [UInt8](unsafeUninitializedCapacity: wanted) { buffer, initialized in
+            initialized = 0
+            guard let base = buffer.baseAddress else { return }
+            while initialized < wanted {
+                let result = pread(descriptor, base + initialized, wanted - initialized, off_t(offset + initialized))
+                if result == 0 { break }
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                initialized += result
+            }
+        }
+    }
+
     private func page(_ number: Int) throws -> [UInt8] {
         if let page = pages[number] {
             if recent.last != number {
@@ -76,8 +97,7 @@ public final class FileByteSource: ByteSource {
             }
             return page
         }
-        try handle.seek(toOffset: UInt64(number * pageSize))
-        let page = [UInt8](try handle.read(upToCount: pageSize) ?? Data())
+        let page = try readPage(at: number * pageSize)
         pages[number] = page
         recent.append(number)
         if recent.count > maximumPages {

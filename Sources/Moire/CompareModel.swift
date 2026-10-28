@@ -6,8 +6,9 @@ import SwiftUI
 struct Side {
     enum Content {
         case text(TextDocument)
-        /// A file that is not text. Only its bytes can be compared.
-        case binary(Data)
+        /// A file that is not text. Only its bytes can be compared. `data` is nil for a big
+        /// file, which stays on disk and is read from there.
+        case binary(size: Int64, data: Data?)
     }
 
     var content: Content = .text(TextDocument("")) {
@@ -53,8 +54,8 @@ struct Side {
     var origin: String?
 
     var subtitle: String {
-        if case .binary(let data) = content {
-            return "Binary · " + ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        if case .binary(let size, _) = content {
+            return "Binary · " + ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
         }
         let document = document
         let count = document.lines.count
@@ -272,15 +273,19 @@ final class CompareModel {
             let result = await Task.detached(priority: .userInitiated) {
                 // Taken before reading: a write during the read then still counts as a change.
                 let signature = FileSignature(url: url)
-                return Result { (try FileContent.read(url), signature) }
+                // A big file that is not text stays on disk; only its size is kept.
+                if let size = FileContent.largeBinarySize(url) {
+                    return Result<(FileContent?, Int64, FileSignature?), Error>.success((nil, size, signature))
+                }
+                return Result { (try FileContent.read(url), 0, signature) }
             }.value
             guard !Task.isCancelled else { return }
             loadTasks[side] = nil
             isLoading = !loadTasks.isEmpty
             switch result {
-            case .success(let (file, signature)):
+            case .success(let (file, largeBinarySize, signature)):
                 forgetEdits()
-                var new = Side(file: file)
+                var new = file.map(Side.init(file:)) ?? Side(content: .binary(size: largeBinarySize, data: nil), url: url)
                 new.origin = origin
                 self[side] = new
                 diskSignatures[side] = signature
@@ -830,7 +835,7 @@ extension Side {
             self.init(content: .text(document), url: file.url)
             self.encoding = encoding
         case .binary(let data):
-            self.init(content: .binary(data), url: file.url)
+            self.init(content: .binary(size: Int64(data.count), data: data), url: file.url)
         }
     }
 }

@@ -325,3 +325,32 @@ struct LineAnchorTests {
         #expect(anchor.adjusted(for: LineEdit(side: .left, range: 9..<12, lines: [])) == anchor)
     }
 }
+
+struct LargeBinaryTests {
+    private func file(_ data: Data) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(path: "moire-big-\(UUID().uuidString).bin")
+        try data.write(to: url)
+        return url
+    }
+
+    @Test func `recognizes a big binary file from its first bytes`() throws {
+        var bytes = Data(count: 200_000)
+        bytes[10] = 1
+        let binary = try file(bytes)
+        #expect(FileContent.largeBinarySize(binary, from: 100_000) == 200_000)
+        // Small, text, or UTF-16 with a byte order mark: read as usual.
+        #expect(FileContent.largeBinarySize(binary, from: 300_000) == nil)
+        #expect(FileContent.largeBinarySize(try file(Data(repeating: 65, count: 200_000)), from: 100_000) == nil)
+        #expect(FileContent.largeBinarySize(try file(Data([0xFF, 0xFE]) + Data(count: 200_000)), from: 100_000) == nil)
+    }
+
+    @Test func `compares big files without reading them whole`() throws {
+        var bytes = Data(count: 3 << 20)
+        let a = try file(bytes)
+        let b = try file(bytes)
+        bytes[bytes.count - 1] = 9
+        let c = try file(bytes)
+        #expect(try FileContent.sameBytes(a, b))
+        #expect(try !FileContent.sameBytes(a, c))
+    }
+}

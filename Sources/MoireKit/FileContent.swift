@@ -69,6 +69,25 @@ public struct FileContent: Sendable {
         self.body = body
     }
 
+    /// The size of a file that is big and not text, judged from its first 8 KB the way `decode`
+    /// judges whole files; nil for anything else. Such a file is better not read whole: its
+    /// bytes can be compared and shown straight from disk.
+    public static func largeBinarySize(_ url: URL, from threshold: Int64 = 64 << 20) -> Int64? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), Int64(size) >= threshold else { return nil }
+        try? handle.seek(toOffset: 0)
+        guard let head = try? handle.read(upToCount: 8192) else { return nil }
+        let marks: [[UInt8]] = [[0xEF, 0xBB, 0xBF], [0xFF, 0xFE], [0xFE, 0xFF]]
+        guard !marks.contains(where: { head.starts(with: $0) }), head.contains(0) else { return nil }
+        return Int64(size)
+    }
+
+    /// Whether two files hold exactly the same bytes, read in pieces, never whole.
+    public static func sameBytes(_ left: URL, _ right: URL) throws -> Bool {
+        try ContentComparer.bytes(LocalFile(left.path(percentEncoded: false)), LocalFile(right.path(percentEncoded: false)))
+    }
+
     /// Reads the whole file into one block of memory, which a text file then keeps as its lines,
     /// so a big file is not copied again on the way in.
     public static func read(_ url: URL) throws -> FileContent {

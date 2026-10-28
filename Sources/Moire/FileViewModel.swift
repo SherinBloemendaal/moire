@@ -189,7 +189,8 @@ extension Side {
     var byteInput: ByteInput {
         if let url, !isDirty { return .file(url) }
         switch content {
-        case .binary(let data): return .data(data)
+        case .binary(_, let data?): return .data(data)
+        case .binary(_, nil): return url.map(ByteInput.file) ?? .none
         case .text(let text):
             if isEmpty { return .none }
             return .data((try? encoding.encode(text)) ?? Data(text.utf8))
