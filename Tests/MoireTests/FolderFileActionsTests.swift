@@ -48,16 +48,21 @@ struct FolderFileActionsTests {
         defer { FolderModel.confirmTrash = original }
         var asked: [([URL], SideID)] = []
         FolderModel.confirmTrash = { asked.append(($0, $1)); return true }
-        let left = try folder(["same.txt": "s", "extra.txt": "e"])
+        // A name of its own, so the test can take back out of the Trash exactly what it put there.
+        let extra = "extra-\(UUID().uuidString).txt"
+        let trash = try FileManager.default.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+        defer { try? FileManager.default.removeItem(at: trash.appending(path: extra)) }
+        let left = try folder(["same.txt": "s", extra: "e"])
         let right = try folder(["same.txt": "s"])
         let model = try await compared(left, right)
-        #expect(try status("extra.txt", in: model) == .leftOnly)
+        #expect(try status(extra, in: model) == .leftOnly)
 
-        model.trash([try item("extra.txt", in: model)], side: .left)
+        model.trash([try item(extra, in: model)], side: .left)
         #expect(asked.map(\.0.count) == [1])
-        #expect(asked.first?.0.first?.lastPathComponent == "extra.txt")
+        #expect(asked.first?.0.first?.lastPathComponent == extra)
         #expect(asked.first?.1 == .left)
         #expect(try names(left) == ["same.txt"])
+        #expect(FileManager.default.fileExists(atPath: trash.appending(path: extra).path(percentEncoded: false)))
         #expect(model.errorMessage == nil)
 
         try await finished(model)
