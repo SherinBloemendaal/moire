@@ -4,7 +4,7 @@ import MoireKit
 /// Typing in the comparison: one line at a time, in an editor laid over that line.
 extension DiffListController {
     func beginEditing(side: SideID, line: Int, event: NSEvent?) {
-        guard !model.isEditing, !model[side].isBinary, line < model[side].document.lines.count else { return }
+        guard !model.isEditing, model.canEdit(side), line < model[side].document.lines.count else { return }
         if let editor, editor.side == side, editor.line == line { return }
         endEditing()
         let editor = InlineEditor(side: side, line: line, metrics: metrics, controller: self)

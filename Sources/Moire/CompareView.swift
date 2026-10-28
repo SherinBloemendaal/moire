@@ -121,6 +121,12 @@ private struct SideCard: View {
                     if value.isDirty {
                         Circle().fill(Theme.changed).frame(width: 7, height: 7).help("Unsaved changes")
                     }
+                    if value.isReadOnly {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .help(value.url == nil ? "Read-only" : "A temporary copy, read-only: an edit saved here would be lost")
+                    }
                 }
                 Text(value.subtitle)
                     .font(.system(size: 11))
@@ -138,7 +144,7 @@ private struct SideCard: View {
                 }
                 Divider()
                 Button("Save", systemImage: "square.and.arrow.down") { model.save(side) }
-                    .disabled(value.isBinary || (value.url != nil && !value.isDirty))
+                    .disabled(value.isBinary || value.isReadOnly || (value.url != nil && !value.isDirty))
                 Button("Clear", systemImage: "xmark", role: .destructive) { model.clear(side) }
             } label: {
                 Image(systemName: "ellipsis")
@@ -178,6 +184,7 @@ private struct EditorPane: View {
 
     var body: some View {
         TextEditor(text: $text)
+            .disabled(!model.canEdit(side))
             .font(Theme.code(size: model.fontSize))
             .scrollContentBackground(.hidden)
             .autocorrectionDisabled()

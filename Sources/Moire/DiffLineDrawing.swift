@@ -277,8 +277,10 @@ extension DiffListController {
         capsule.stroke()
         Palette.paneBorder.setFill()
         NSRect(x: frame.midX - 0.5, y: frame.midY - 6, width: 1, height: 12).fill()
-        for (name, x) in [("arrow.right", frame.minX + frame.width / 4), ("arrow.left", frame.minX + frame.width * 3 / 4)] {
-            guard let image = DiffSymbols.image(name, size: 10, color: Palette.iris) else { continue }
+        for (name, x, side) in [("arrow.right", frame.minX + frame.width / 4, SideID.right), ("arrow.left", frame.minX + frame.width * 3 / 4, .left)] {
+            // Copying into a read-only side is not offered; its arrow is shown faded.
+            let color = model.canEdit(side) ? Palette.iris : Palette.gutterText
+            guard let image = DiffSymbols.image(name, size: 10, color: color) else { continue }
             image.draw(in: NSRect(x: x - image.size.width / 2, y: frame.midY - image.size.height / 2, width: image.size.width, height: image.size.height))
         }
     }

@@ -17,6 +17,9 @@ struct Side {
     var url: URL?
     var encoding: TextEncoding = .utf8
     var isDirty = false
+    /// Shown and compared, never changed or saved: a copy downloaded from a server or unpacked
+    /// from an archive, or text taken from a document.
+    var isReadOnly = false
     /// Different for every content any side ever had, so a change is noticed without comparing
     /// the text, also when a whole new side replaces this one.
     private(set) var revision = Side.nextRevision()
@@ -66,7 +69,7 @@ struct Side {
         case .cr: "CR"
         }
         let location = origin ?? url.map { ($0.deletingLastPathComponent().path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath } ?? "Typed or pasted"
-        return "\(location) · \(lines) · \(encoding.name) · \(ending)"
+        return "\(location) · \(lines) · \(encoding.name) · \(ending)" + (isReadOnly ? " · Read-only" : "")
     }
 }
 
@@ -154,8 +157,6 @@ final class CompareModel {
     }
 
     var isEditing = false
-    /// Text taken from documents: shown and compared, never changed or saved.
-    var isReadOnly = false
     /// How the files are shown: as text, or as hex, an image, a table and so on.
     let fileView = FileViewModel()
     private(set) var diff: LineDiff?
@@ -222,6 +223,13 @@ final class CompareModel {
     var hasUnsavedChanges: Bool { left.isDirty || right.isDirty }
     var hasBinarySide: Bool { left.isBinary || right.isBinary }
 
+    /// Whether typing, copying changes into, and saving a side are allowed.
+    func canEdit(_ side: SideID) -> Bool {
+        !self[side].isReadOnly && !self[side].isBinary
+    }
+
+    var canEditEitherSide: Bool { canEdit(.left) || canEdit(.right) }
+
     subscript(side: SideID) -> Side {
         get { side == .left ? left : right }
         set {
@@ -252,21 +260,24 @@ final class CompareModel {
         }
     }
 
-    /// Shows copies downloaded from a server, read-only: there is nowhere to save them back to.
+    /// Shows a pair from a folder comparison with a server. The copies downloaded from it are
+    /// read-only, since there is nowhere to save them back to; a local side stays editable.
     func openDownloaded(left: (url: URL, origin: String)?, right: (url: URL, origin: String)?) {
         guard canReplace(.left), canReplace(.right) else { return }
         isEditing = false
         for (file, side) in [(left, SideID.left), (right, .right)] {
             if let file { load(file.url, into: side, askFirst: false, origin: file.origin) } else { self[side] = Side() }
         }
-        isReadOnly = true
     }
 
     /// Reads the file off the main thread; a big file then does not stall the window. Unsaved
-    /// changes are only asked about when `askFirst` is set.
+    /// changes are only asked about when `askFirst` is set. A file in one of Moire's temporary
+    /// folders is read-only; reading the same file again keeps where it came from.
     func load(_ url: URL, into side: SideID, askFirst: Bool = true, origin: String? = nil) {
         guard !askFirst || canReplace(side) else { return }
-        isReadOnly = false
+        let isSameFile = self[side].url == url
+        let origin = origin ?? (isSameFile ? self[side].origin : nil) ?? ArchiveRouter.origin(of: url)
+        let isReadOnly = TemporaryCopies.contains(url) || (isSameFile && self[side].isReadOnly)
         loadTasks[side]?.cancel()
         isLoading = true
         loadTasks[side] = Task {
@@ -287,6 +298,7 @@ final class CompareModel {
                 forgetEdits()
                 var new = file.map(Side.init(file:)) ?? Side(content: .binary(size: largeBinarySize, data: nil), url: url)
                 new.origin = origin
+                new.isReadOnly = isReadOnly
                 self[side] = new
                 diskSignatures[side] = signature
                 if hasBinarySide { isEditing = false }
@@ -306,13 +318,13 @@ final class CompareModel {
 
     /// Replaces the whole text of a side, from the plain text editor.
     func setText(_ text: String, on side: SideID) {
-        guard !isReadOnly, !self[side].isBinary else { return }
+        guard canEdit(side) else { return }
         forgetEdits()
         setDocument(TextDocument(text), on: side)
     }
 
     private func setDocument(_ document: TextDocument, on side: SideID) {
-        guard !isReadOnly, !self[side].isBinary else { return }
+        guard canEdit(side) else { return }
         replacedByEdit = true
         defer { replacedByEdit = false }
         self[side].content = .text(document)
@@ -383,6 +395,10 @@ final class CompareModel {
     func save(_ side: SideID) -> Bool {
         var current = self[side]
         guard !current.isBinary else { return true }
+        guard !current.isReadOnly else {
+            errorMessage = "\(current.title) is a read-only copy, so it cannot be saved."
+            return false
+        }
 
         var destination = current.url
         if destination == nil {
@@ -503,7 +519,7 @@ final class CompareModel {
 
     /// Copies a change over to the other side. `toRight` copies the left version to the right.
     func copy(hunk index: Int, toRight: Bool) {
-        guard !isReadOnly, let diff = currentDiff(), diff.hunks.indices.contains(index) else { return }
+        guard canEdit(toRight ? .right : .left), let diff = currentDiff(), diff.hunks.indices.contains(index) else { return }
         perform(diff.edit(copyingHunk: index, toRight: toRight), actionName: toRight ? "Copy Change to Right" : "Copy Change to Left")
         // The next change now sits where this one was.
         currentHunk = index < diff.hunks.count - 1 ? index : nil
@@ -531,7 +547,7 @@ final class CompareModel {
 
     /// Copies one line of a change: the left version of that row goes right, or the other way.
     func copy(row index: Int, toRight: Bool) {
-        guard let diff = currentDiff(), index < diff.rowCount, let edit = diff.edit(copyingRow: index, toRight: toRight) else { return }
+        guard canEdit(toRight ? .right : .left), let diff = currentDiff(), index < diff.rowCount, let edit = diff.edit(copyingRow: index, toRight: toRight) else { return }
         perform(edit, actionName: toRight ? "Copy Line to Right" : "Copy Line to Left")
     }
 
@@ -549,7 +565,7 @@ final class CompareModel {
 
     /// Changes lines of one side as one undoable step.
     func perform(_ edit: LineEdit, actionName: String, typing: Bool = false) {
-        guard !isReadOnly, !self[edit.side].isBinary else { return }
+        guard canEdit(edit.side) else { return }
         let document = self[edit.side].document
         guard edit.range.upperBound <= document.lines.count else { return }
         let inverse = edit.inverse(in: document)
