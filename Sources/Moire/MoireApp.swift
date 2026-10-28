@@ -23,6 +23,8 @@ struct MoireApp: App {
             TabView {
                 RulesSettingsView()
                     .tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease") }
+                UpdateSettingsView()
+                    .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             }
         }
     }
@@ -146,6 +148,8 @@ final class AppState {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Starts the update checks on their schedule.
+        _ = Updates.shared
         let downloads = FolderModel.downloads
         Task.detached(priority: .background) {
             ArchiveExtractor.removeLeftovers()
@@ -277,6 +281,10 @@ struct MoireCommands: Commands {
     var body: some Commands {
         // The menus exist from launch on, before any window: the one place to get this early.
         let _ = Windows.shared.provide(openWindow)
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { Updates.shared.check() }
+                .disabled(!Updates.shared.canCheck)
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Window") { Windows.shared.newWindow() }
                 .keyboardShortcut("n")

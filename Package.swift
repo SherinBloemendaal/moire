@@ -11,11 +11,15 @@ let package = Package(
         // Shipped inside the app as Contents/Helpers/moire.
         .executable(name: "moire-cli", targets: ["MoireCLI"]),
     ],
+    dependencies: [
+        // Checks for, downloads and installs new versions of the app.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
+    ],
     targets: [
         .target(name: "MoireKit"),
         .executableTarget(
             name: "Moire",
-            dependencies: ["MoireKit"],
+            dependencies: ["MoireKit", .product(name: "Sparkle", package: "Sparkle")],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .executableTarget(name: "MoireBench", dependencies: ["MoireKit"]),

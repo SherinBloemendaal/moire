@@ -77,6 +77,10 @@ Every [release](https://github.com/SherinBloemendaal/moire/releases/latest) also
 
 </details>
 
+### Updates
+
+Moire checks for a new version once a day and shows what changed, with **Install Update**, **Remind Me Later** and **Skip This Version**. **Moire → Check for Updates…** checks right away, and **Settings → Updates** turns the daily check off or lets updates install on their own. Every update is signed, and Moire refuses a download whose signature does not match. Updates come through [Sparkle](https://sparkle-project.org).
+
 ## 📝 Comparing text
 
 Drop two files on the window, open them with ⌘O, or paste two snippets.

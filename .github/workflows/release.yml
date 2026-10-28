@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # The release notes in the update window come from the commits since the last tag.
+          fetch-depth: 0
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -47,6 +50,29 @@ jobs:
           shasum -a 256 Moire.dmg Moire.zip > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Release notes for the update window
+        run: |
+          set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          range="${previous:+$previous..}${GITHUB_REF_NAME}"
+          # User-facing changes only, without the "type(scope): " prefix.
+          git log --no-merges --format=%s "$range" \
+            | grep -E '^(feat|fix|perf)(\([^)]*\))?!?: ' \
+            | sed -E 's/^[a-z]+(\([^)]*\))?!?: //' > dist/notes.txt || true
+          cat dist/notes.txt
+
+      - name: Update feed
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::error::The SPARKLE_ED_PRIVATE_KEY secret is missing, so the update cannot be signed."
+            exit 1
+          fi
+          scripts/make-appcast.sh "${GITHUB_REF_NAME#v}" dist/Moire.zip dist/appcast.xml dist/notes.txt
+          cat dist/appcast.xml
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -58,5 +84,6 @@ jobs:
             dist/Moire.dmg
             dist/Moire.zip
             dist/SHA256SUMS
+            dist/appcast.xml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

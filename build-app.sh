@@ -19,19 +19,30 @@ binary="$bin_path/Moire"
 
 app="build/Moire.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Helpers"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Helpers" "$app/Contents/Frameworks"
 cp "$binary" "$app/Contents/MacOS/Moire"
 # The command line tool; link it into your PATH to use it as `moire`.
 cp "$bin_path/moire-cli" "$app/Contents/Helpers/moire"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+# Sparkle, which installs updates. ditto keeps the framework's symbolic links.
+ditto "$bin_path/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
+if ! otool -l "$app/Contents/MacOS/Moire" | grep -q "@executable_path/../Frameworks"; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/Moire"
+fi
 
 if [ -n "${VERSION:-}" ]; then
     plutil -replace CFBundleShortVersionString -string "$VERSION" "$app/Contents/Info.plist"
     plutil -replace CFBundleVersion -string "$VERSION" "$app/Contents/Info.plist"
 fi
 
-# Nested code is signed first; a universal build leaves the helper without a signature.
+# Nested code is signed first, innermost first; a universal build leaves the helper without a
+# signature.
 codesign --force --sign - "$app/Contents/Helpers/moire"
+sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+for item in "$sparkle"/XPCServices/*.xpc "$sparkle/Autoupdate" "$sparkle/Updater.app"; do
+    codesign --force --sign - "$item"
+done
+codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign - "$app"
 echo "Built $app"
