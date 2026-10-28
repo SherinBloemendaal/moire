@@ -25,6 +25,8 @@ public struct FolderCompareSettings: Sendable, Hashable {
     public var allowsHourShift: Bool
     /// For `.lines`.
     public var diffOptions: DiffOptions
+    /// Masks and `.gitignore` handling.
+    public var filter: FolderFilter
     /// Threads that read folders. `nil` picks a number for the disks involved.
     public var folderThreads: Int?
     /// Threads that read file contents. `nil` picks a number for the disks involved.
@@ -36,6 +38,7 @@ public struct FolderCompareSettings: Sendable, Hashable {
         dateTolerance: Int64 = 2_000_000_000,
         allowsHourShift: Bool = true,
         diffOptions: DiffOptions = DiffOptions(),
+        filter: FolderFilter = FolderFilter(),
         folderThreads: Int? = nil,
         contentThreads: Int? = nil
     ) {
@@ -44,6 +47,7 @@ public struct FolderCompareSettings: Sendable, Hashable {
         self.dateTolerance = dateTolerance
         self.allowsHourShift = allowsHourShift
         self.diffOptions = diffOptions
+        self.filter = filter
         self.folderThreads = folderThreads
         self.contentThreads = contentThreads
     }
@@ -118,7 +122,15 @@ public final class FolderEngine: Sendable {
         self.settings = settings
         // Metadata never reads contents, so there is nothing to remember.
         self.cache = settings.method == .metadata ? nil : cache
+        var exclude = settings.filter.exclude
+        // Git never lists its own folder.
+        if settings.filter.useGitignore { exclude.append(".git/") }
+        rootRules = IgnoreRules(patterns: exclude)
+        includeRules = IgnoreRules(patterns: settings.filter.include)
     }
+
+    private let rootRules: IgnoreRules
+    private let includeRules: IgnoreRules
 
     /// Stops a running comparison soon. `run()` then throws `CancellationError`.
     public func cancel() {
@@ -158,7 +170,7 @@ public final class FolderEngine: Sendable {
 
         pools.withLock { $0 = Pools(folders: folderPool, contents: contentPool) }
         defer { pools.withLock { $0 = nil } }
-        folderPool.submit([FolderJob(item: 0, left: leftRoot, right: rightRoot)])
+        folderPool.submit([FolderJob(item: 0, left: leftRoot, right: rightRoot, relative: "", rules: rootRules)])
         folderPool.waitUntilIdle()
         // Every content job has been handed out once the listing is done.
         contentPool?.waitUntilIdle()
@@ -205,6 +217,10 @@ public final class FolderEngine: Sendable {
         let item: Int32
         let left: String?
         let right: String?
+        /// The folder's path relative to the compared folders; empty for the root.
+        let relative: String
+        /// Exclude masks plus the `.gitignore` rules of this folder and the folders above it.
+        let rules: IgnoreRules
     }
 
     private func read(_ job: FolderJob) {
@@ -224,6 +240,19 @@ public final class FolderEngine: Sendable {
                 tree.errors[job.item] = error.localizedDescription
             }
             return
+        }
+
+        var rules = job.rules
+        if settings.filter.useGitignore {
+            for folder in [job.left, job.right].compactMap({ $0 }) {
+                if let text = try? String(contentsOfFile: folder + "/.gitignore", encoding: .utf8) {
+                    rules.add(gitignore: text, base: job.relative)
+                }
+            }
+        }
+        if !rules.isEmpty || !includeRules.isEmpty {
+            leftEntries = leftEntries.filter { keep($0, in: job.relative, rules: rules) }
+            rightEntries = rightEntries.filter { keep($0, in: job.relative, rules: rules) }
         }
 
         var children = pair(leftEntries, rightEntries, job: job)
@@ -261,7 +290,9 @@ public final class FolderEngine: Sendable {
             folders.append(FolderJob(
                 item: item,
                 left: child.left.exists ? job.left.map { $0 + "/" + child.name } : nil,
-                right: child.right.exists ? job.right.map { $0 + "/" + child.name } : nil
+                right: child.right.exists ? job.right.map { $0 + "/" + child.name } : nil,
+                relative: job.relative.isEmpty ? child.name : job.relative + "/" + child.name,
+                rules: rules
             ))
         }
         if !contents.isEmpty {
@@ -272,6 +303,14 @@ public final class FolderEngine: Sendable {
         // Reversed, so a pool (which takes the last job first) works in list order.
         current?.folders.submit(folders.reversed())
         current?.contents?.submit(contents.reversed())
+    }
+
+    private func keep(_ entry: DirectoryEntry, in folder: String, rules: IgnoreRules) -> Bool {
+        let path = folder.isEmpty ? entry.name : folder + "/" + entry.name
+        let isDirectory = entry.kind == .directory
+        if rules.ignores(path, isDirectory: isDirectory) { return false }
+        if !includeRules.isEmpty, !isDirectory, !includeRules.matchesAny(path, isDirectory: false) { return false }
+        return true
     }
 
     private func stopPools() {
