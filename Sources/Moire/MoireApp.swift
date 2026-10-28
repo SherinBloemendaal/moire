@@ -23,11 +23,13 @@ final class AppState {
     enum Mode: String, CaseIterable {
         case text
         case folders
+        case merge
     }
 
     var mode = Mode.text
     let compare = CompareModel()
     let folders = FolderModel()
+    let merge = MergeModel()
     /// True while the text comparison shows a pair picked from the folder comparison.
     var cameFromFolders = false
 
@@ -54,11 +56,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let state = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if let flag = arguments.firstIndex(of: "--merge") {
+            openMergetool(Array(arguments[(flag + 1)...]))
+            return
+        }
+
         // `open -a Moire --args left.txt right.txt`, or a difftool configured to run the binary.
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
         if !urls.isEmpty { state.open(urls) }
+    }
+
+    /// `Moire --merge BASE LOCAL REMOTE MERGED`, the way `git mergetool` passes the files.
+    private func openMergetool(_ paths: [String]) {
+        guard paths.count >= 4 else {
+            FileHandle.standardError.write(Data("usage: Moire --merge BASE LOCAL REMOTE MERGED\n".utf8))
+            exit(2)
+        }
+        let urls = paths.prefix(4).map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
+        state.merge.openMergetool(base: urls[0], left: urls[1], right: urls[2], output: urls[3])
+        state.mode = .merge
+        NSApp.activate()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -70,6 +90,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if state.merge.isDirty {
+            let alert = NSAlert()
+            alert.messageText = "Save the merge result before quitting?"
+            alert.informativeText = state.merge.isMergetool
+                ? "Without saving, git keeps the file marked as unmerged."
+                : "The choices you made in the merge are not saved yet."
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don't Save")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                guard state.merge.save() else { return .terminateCancel }
+            case .alertSecondButtonReturn: break
+            default: return .terminateCancel
+            }
+        }
+
         guard state.compare.hasUnsavedChanges else { return .terminateNow }
 
         let alert = NSAlert()
@@ -85,13 +122,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default: return .terminateCancel
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // git mergetool with `trustExitCode` reads a failure as "not merged yet".
+        guard state.merge.isMergetool, state.merge.exitStatus != 0 else { return }
+        exit(state.merge.exitStatus)
+    }
 }
 
 struct MoireCommands: Commands {
     let state: AppState
 
     private var compare: CompareModel { state.compare }
+    private var merge: MergeModel { state.merge }
     private var isText: Bool { state.mode == .text }
+    private var isMerge: Bool { state.mode == .merge }
+    private var canResolve: Bool {
+        guard isMerge, let chunk = merge.currentChunk, let result = merge.merge, result.chunks.indices.contains(chunk) else { return false }
+        return result.chunks[chunk].kind != .unchanged
+    }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -109,14 +158,28 @@ struct MoireCommands: Commands {
                 if state.folders.left != nil, state.folders.right == nil { state.folders.choose(.right) }
             }
             .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Merge Files…") {
+                state.mode = .merge
+                merge.chooseFiles()
+            }
+            .keyboardShortcut("o", modifiers: [.command, .option])
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { compare.saveAll() }
-                .keyboardShortcut("s")
-                .disabled(!compare.hasUnsavedChanges)
-            Button("Reload from Disk") { compare.reload() }
-                .keyboardShortcut("r")
-                .disabled(!compare.hasFiles)
+            Button("Save") {
+                if isMerge { merge.save() } else { compare.saveAll() }
+            }
+            .keyboardShortcut("s")
+            .disabled(isMerge ? merge.merge == nil : !compare.hasUnsavedChanges)
+            Button("Reload from Disk") {
+                if isMerge { merge.reload() } else { compare.reload() }
+            }
+            .keyboardShortcut("r")
+            .disabled(isMerge ? !merge.isReady : !compare.hasFiles)
+            Divider()
+            Button("Export as Patch…") { ComparisonExport.exportPatch(compare) }
+                .disabled(!isText || !ComparisonExport.canExport(compare))
+            Button("Export as HTML Report…") { ComparisonExport.exportHTML(compare) }
+                .disabled(!isText || !ComparisonExport.canExport(compare))
         }
         CommandMenu("Compare") {
             Button("Next Change") { compare.goToNextChange() }
@@ -137,9 +200,40 @@ struct MoireCommands: Commands {
                 if isText { compare.swapSides() } else { state.folders.swapSides() }
             }
             .keyboardShortcut("x", modifiers: [.command, .shift])
+            .disabled(isMerge)
             Button(compare.isEditing ? "Show Differences" : "Edit Text") { compare.isEditing.toggle() }
                 .keyboardShortcut("e")
                 .disabled(!isText || compare.hasBinarySide)
+        }
+        CommandMenu("Merge") {
+            Button("Next Conflict") { merge.goToNextConflict() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                .disabled(!isMerge || merge.conflictCount == 0)
+            Button("Previous Conflict") { merge.goToPreviousConflict() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                .disabled(!isMerge || merge.conflictCount == 0)
+            Divider()
+            Button("Take Left") { merge.resolveCurrent(.left) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                .disabled(!canResolve)
+            Button("Take Right") { merge.resolveCurrent(.right) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                .disabled(!canResolve)
+            Button("Take Both, Left First") { merge.resolveCurrent(.leftThenRight) }
+                .keyboardShortcut("b", modifiers: [.command, .control])
+                .disabled(!canResolve)
+            Button("Take Both, Right First") { merge.resolveCurrent(.rightThenLeft) }
+                .keyboardShortcut("b", modifiers: [.command, .control, .option])
+                .disabled(!canResolve)
+            Button("Take Base") { merge.resolveCurrent(.base) }
+                .disabled(!canResolve)
+            Divider()
+            Button("Edit by Hand") { merge.beginEditCurrent() }
+                .keyboardShortcut("e", modifiers: [.command, .control])
+                .disabled(!isMerge || merge.currentChunk == nil)
+            Button("Undo Choice") { merge.resetCurrent() }
+                .keyboardShortcut(.delete, modifiers: [.command, .control])
+                .disabled(!isMerge || merge.currentChunk.map { merge.resolution(of: $0) == nil } ?? true)
         }
         CommandGroup(after: .toolbar) {
             Button("Side by Side") { compare.layout = .sideBySide }
