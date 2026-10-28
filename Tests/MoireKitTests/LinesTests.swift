@@ -78,6 +78,18 @@ struct LinesTests {
         #expect(document.text == text)
     }
 
+    @Test func `splits a text of a million lines`() {
+        let count = 1_000_000
+        let text = (0..<count).map { "line \($0)\n" }.joined()
+        let document = TextDocument(text)
+        #expect(document.lines.count == count)
+        #expect(document.endsWithLineBreak)
+        for index in [0, 1, 4095, 314_159, 500_000, count - 2, count - 1] {
+            #expect(document.lines[index] == "line \(index)")
+        }
+        #expect(document.text == text)
+    }
+
     @Test func `replaces lines without touching the rest`() {
         var lines = TextDocument("a\nb\nc\nd\n").lines
         lines[1] = "B"

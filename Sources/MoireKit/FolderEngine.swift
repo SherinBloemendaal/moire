@@ -196,44 +196,41 @@ public final class FolderEngine: Sendable {
 
     private let pools = Mutex<Pools?>(nil)
 
-    /// Measured on an M2 Max (APFS, 100,000 files): opening and listing files stops scaling at
-    /// about four threads, and more threads make it slower because they wait on each other in
-    /// the kernel. A network share is limited by waiting for answers, so more requests in flight
-    /// pay off there.
     static func folderThreads(left: Volume, right: Volume) -> Int {
-        left.isLocal && right.isLocal ? localThreads : 8
+        ThreadTuning.threads(performanceCores: performanceCores, isLocal: left.isLocal && right.isLocal, items: 0, maxVnodes: maxVnodes).folders
     }
 
     static func contentThreads(left: Volume, right: Volume) -> Int {
-        left.isLocal && right.isLocal ? localThreads : 8
+        ThreadTuning.threads(performanceCores: performanceCores, isLocal: left.isLocal && right.isLocal, items: 0, maxVnodes: maxVnodes).contents
     }
 
-    /// Items (per side, roughly) from which a tree no longer fits in the kernel's vnode cache.
-    /// From there on files are opened from disk rather than from memory, and many requests in
-    /// flight keep the SSD busy: measured on an M2 Max with 1,000,000 files, byte for byte took
-    /// 144 s with 4 content threads, 84 s with 16 and 69 s with 32.
-    static let bigTree: Int = {
+    static let bigTree = ThreadTuning.bigTree(maxVnodes: maxVnodes)
+
+    private func growForBigTree(items: Int) {
+        guard let current = pools.withLock({ $0 }), let sides = sources.withLock({ $0 }) else { return }
+        let threads = ThreadTuning.threads(
+            performanceCores: Self.performanceCores, isLocal: sides.left.volume.isLocal && sides.right.volume.isLocal,
+            items: items, maxVnodes: Self.maxVnodes
+        )
+        current.folders.grow(to: threads.folders)
+        if settings.contentThreads == nil { current.contents?.grow(to: threads.contents) }
+    }
+
+    /// `kern.maxvnodes`, or 0 when it cannot be read.
+    static let maxVnodes: Int = {
         var vnodes: Int32 = 0
         var size = MemoryLayout<Int32>.size
-        guard sysctlbyname("kern.maxvnodes", &vnodes, &size, nil, 0) == 0, vnodes > 0 else { return 131_072 }
-        return Int(vnodes) / 2
+        guard sysctlbyname("kern.maxvnodes", &vnodes, &size, nil, 0) == 0 else { return 0 }
+        return Int(vnodes)
     }()
 
-    private func growForBigTree() {
-        guard let current = pools.withLock({ $0 }), sources.withLock({ $0 })?.left.volume.isLocal == true,
-              sources.withLock({ $0 })?.right.volume.isLocal == true else { return }
-        current.folders.grow(to: 16)
-        if settings.contentThreads == nil { current.contents?.grow(to: 32) }
-    }
-
-    /// Half the performance cores, at least 4 and at most 8.
-    static let localThreads: Int = {
+    static let performanceCores: Int = {
         var cores: Int32 = 0
         var size = MemoryLayout<Int32>.size
         if sysctlbyname("hw.perflevel0.physicalcpu", &cores, &size, nil, 0) != 0 || cores <= 0 {
             cores = Int32(ProcessInfo.processInfo.activeProcessorCount)
         }
-        return min(8, max(4, Int(cores) / 2))
+        return Int(cores)
     }()
 
     // MARK: Reading folders
@@ -320,7 +317,7 @@ public final class FolderEngine: Sendable {
         foldersListed.add(1, ordering: .relaxed)
         let found = itemsFound.add(children.count, ordering: .relaxed).newValue
         if found >= Self.bigTree, found - children.count < Self.bigTree, settings.folderThreads == nil {
-            growForBigTree()
+            growForBigTree(items: found)
         }
 
         var folders: [FolderJob] = []
@@ -542,5 +539,33 @@ public final class FolderEngine: Sendable {
 
     private static func info(_ entry: DirectoryEntry) -> FolderTree.SideInfo {
         FolderTree.SideInfo(kind: FolderTree.Kind(entry.kind), size: entry.size, modified: entry.modified, fileID: entry.fileID)
+    }
+}
+
+/// How many threads read folders and file contents, worked out from the machine and the disks.
+enum ThreadTuning {
+    /// Measured on an M2 Max (APFS, 100,000 files): opening and listing files stops scaling at
+    /// about four threads, and more threads make it slower because they wait on each other in
+    /// the kernel. So: half the performance cores, at least 4 and at most 8.
+    static func localThreads(performanceCores: Int) -> Int {
+        min(8, max(4, performanceCores / 2))
+    }
+
+    /// Items (per side, roughly) from which a tree no longer fits in the kernel's vnode cache.
+    /// From there on files are opened from disk rather than from memory, and many requests in
+    /// flight keep the SSD busy: measured on an M2 Max with 1,000,000 files, byte for byte took
+    /// 144 s with 4 content threads, 84 s with 16 and 69 s with 32.
+    static func bigTree(maxVnodes: Int) -> Int {
+        maxVnodes > 0 ? maxVnodes / 2 : 131_072
+    }
+
+    /// Threads for a tree with `items` found so far. A network share is limited by waiting for
+    /// answers, so more requests in flight pay off there from the start; it does not grow, as
+    /// its vnodes are not what limits it.
+    static func threads(performanceCores: Int, isLocal: Bool, items: Int, maxVnodes: Int) -> (folders: Int, contents: Int) {
+        guard isLocal else { return (8, 8) }
+        if items >= bigTree(maxVnodes: maxVnodes) { return (16, 32) }
+        let threads = localThreads(performanceCores: performanceCores)
+        return (threads, threads)
     }
 }
