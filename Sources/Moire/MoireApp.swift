@@ -82,7 +82,8 @@ final class AppState {
 
     /// Nothing loaded yet: files from Finder can go here instead of into a new window.
     var isEmpty: Bool {
-        compare.isEmpty && !compare.isEditing && folders.left == nil && folders.right == nil && merge.merge == nil
+        compare.isEmpty && !compare.isEditing && folders.leftLocation == nil && folders.rightLocation == nil
+            && merge.merge == nil && merge.sources.values.allSatisfy { $0.url == nil }
     }
 
     /// For the window's tab and the Window menu.
@@ -175,9 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(2)
         }
         let urls = paths.prefix(4).map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
-        Windows.shared.withFrontmost { state in
+        Windows.shared.withFrontmost { [self] state in
             state.merge.openMergetool(base: urls[0], left: urls[1], right: urls[2], output: urls[3])
             state.mode = .merge
+            mergetool = state.merge
         }
         NSApp.activate()
     }
@@ -195,10 +197,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Asks to save what this window has not saved yet. False means: do not quit.
-    private static func confirmQuit(_ state: AppState) -> Bool {
+    static func confirmQuit(_ state: AppState, closing: Bool = false) -> Bool {
+        let leaving = closing ? "closing" : "quitting"
         if state.merge.isDirty {
             let alert = NSAlert()
-            alert.messageText = "Save the merge result before quitting?"
+            alert.messageText = "Save the merge result before \(leaving)?"
             alert.informativeText = state.merge.isMergetool
                 ? "Without saving, git keeps the file marked as unmerged."
                 : "The choices you made in the merge are not saved yet."
@@ -216,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard state.compare.hasUnsavedChanges else { return true }
 
         let alert = NSAlert()
-        alert.messageText = "Save your changes to \(state.windowTitle) before quitting?"
+        alert.messageText = "Save your changes to \(state.windowTitle) before \(leaving)?"
         alert.informativeText = "A side has changes that are not saved yet."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Don't Save")
@@ -229,11 +232,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Held here, not only by its window: closing the window ends the app, and the exit status
+    /// still has to tell git whether the merge was saved.
+    private var mergetool: MergeModel?
+
     func applicationWillTerminate(_ notification: Notification) {
         for state in Windows.shared.states { state.archives.removeAll() }
         // git mergetool with `trustExitCode` reads a failure as "not merged yet".
-        guard let merge = Windows.shared.states.first(where: { $0.merge.isMergetool })?.merge, merge.exitStatus != 0 else { return }
-        exit(merge.exitStatus)
+        guard let mergetool, mergetool.exitStatus != 0 else { return }
+        exit(mergetool.exitStatus)
     }
 }
 

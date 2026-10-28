@@ -64,6 +64,7 @@ final class Windows {
     func attach(_ window: NSWindow, to state: AppState, asTab: Bool) {
         // The window can show up before or after the view registers its comparison.
         entries[ObjectIdentifier(state), default: Entry(state: state)].window = window
+        CloseGuard.install(on: window, state: state)
         window.tabbingMode = .preferred
         if asTab, let parent = tabParent, parent !== window, parent.isVisible {
             parent.addTabbedWindow(window, ordered: .above)
@@ -116,6 +117,43 @@ final class Windows {
         } else {
             newWindow(urls: urls)
         }
+    }
+}
+
+/// Asks about unsaved work before a window closes. SwiftUI keeps its own window delegate; this one
+/// sits in front of it, answers `windowShouldClose(_:)` and passes everything else on.
+final class CloseGuard: NSObject, NSWindowDelegate {
+    /// Read from `responds(to:)`, which AppKit may call from any thread; set once, before use.
+    nonisolated(unsafe) private weak var original: NSWindowDelegate?
+    private weak var state: AppState?
+    /// The window keeps its delegate weakly, so the guards are kept here.
+    private static var guards: [ObjectIdentifier: CloseGuard] = [:]
+
+    static func install(on window: NSWindow, state: AppState) {
+        guard !(window.delegate is CloseGuard) else { return }
+        let guardian = CloseGuard()
+        guardian.original = window.delegate
+        guardian.state = state
+        guards[ObjectIdentifier(window)] = guardian
+        window.delegate = guardian
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if let state, !AppDelegate.confirmQuit(state, closing: true) { return false }
+        return original?.windowShouldClose?(sender) ?? true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        original?.windowWillClose?(notification)
+        if let window = notification.object as? NSWindow { Self.guards[ObjectIdentifier(window)] = nil }
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || original?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
+        original?.responds(to: selector) == true ? original : super.forwardingTarget(for: selector)
     }
 }
 
