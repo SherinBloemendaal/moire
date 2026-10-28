@@ -23,15 +23,11 @@ struct SnapshotTests {
     /// Lets loading tasks run and SwiftUI and AppKit lay out and draw, until `ready` holds or the
     /// time is up. Sleeping, not spinning the run loop, so work queued on the main actor runs.
     private func settle(_ seconds: Double = 8, until ready: () -> Bool = { false }) async throws {
-        let end = Date().addingTimeInterval(seconds)
-        while Date() < end {
-            try await Task.sleep(for: .milliseconds(50))
-            if ready() {
-                try await Task.sleep(for: .milliseconds(800))
-                return
-            }
+        guard try await Press.poll(seconds: seconds, every: .milliseconds(50), until: ready) else {
+            Issue.record("not ready after \(seconds) s")
+            return
         }
-        Issue.record("not ready after \(seconds) s")
+        try await Task.sleep(for: .milliseconds(800))
     }
 
     private func render(_ view: some View, size: NSSize = NSSize(width: 1240, height: 780), dark: Bool = false, name: String, until ready: () -> Bool = { true }) async throws {

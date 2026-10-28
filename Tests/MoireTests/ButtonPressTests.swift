@@ -56,22 +56,33 @@ enum Press {
     /// Presses until `done` holds: a button stays disabled until its view is ready (the sync plan
     /// is worked out after the sheet appears), and pressing a disabled button does nothing.
     static func press(_ title: String, in root: NSView, until done: () -> Bool) async throws -> Bool {
-        let end = Date().addingTimeInterval(5)
-        while Date() < end {
-            _ = press(title, in: root)
-            for _ in 0..<10 {
-                try await Task.sleep(for: .milliseconds(5))
-                if done() { return true }
-            }
+        var looks = 0
+        return try await poll(seconds: 5, every: .milliseconds(5)) {
+            if looks % 10 == 0 { _ = press(title, in: root) }
+            looks += 1
+            return done()
         }
-        return false
     }
 
     static func wait(_ seconds: Double = 5, until ready: () -> Bool) async throws {
-        let end = Date().addingTimeInterval(seconds)
-        while Date() < end {
-            if ready() { return }
-            try await Task.sleep(for: .milliseconds(20))
+        _ = try await poll(seconds: seconds, every: .milliseconds(20), until: ready)
+    }
+
+    /// Checks until `ready` holds. The main actor is shared with every other UI suite, and one of
+    /// them can hold it for many seconds (rendering a snapshot, printing): a wait of 5 s once got
+    /// to look only a few times in 20 s, before SwiftUI had even worked out the sync plan. So a
+    /// wait gives up only after it has looked as often as an idle main actor allows in `seconds`,
+    /// and at the latest after twelve times `seconds`.
+    static func poll(seconds: Double, every interval: Duration, until ready: () -> Bool) async throws -> Bool {
+        let start = Date()
+        let looks = Int(seconds / (Double(interval.components.attoseconds) / 1e18 + Double(interval.components.seconds)))
+        var looked = 0
+        while true {
+            if ready() { return true }
+            looked += 1
+            let waited = Date().timeIntervalSince(start)
+            if waited >= seconds * 12 || (waited >= seconds && looked >= looks) { return false }
+            try await Task.sleep(for: interval)
         }
     }
 }
