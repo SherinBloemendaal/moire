@@ -16,7 +16,7 @@ file cache: the first, untimed run reads everything once.
 
 | File | What it holds |
 | --- | --- |
-| `legacy-2000.json`, `legacy-5000.json`, `legacy-10000.json` | The 1.0 engine. Its time grows with the square of the file count (sorting rebuilt a lookup table on every comparison), so 100,000 files would take about half an hour per run. |
+| `legacy-2000.json`, `legacy-5000.json`, `legacy-10000.json` | The 1.0 engine, measured before it was removed. Its time grows with the square of the file count (sorting rebuilt a lookup table on every comparison), so 100,000 files would take about half an hour per run. |
 | `engine-100k-m2max.json` | The new engine on an M2 Max (12 cores, 64 GB), 100,000 files and 16 files of 64 MB. |
 | `baseline-ci.json` | The CI baseline, taken from a run of the `benchmark` job on GitHub. |
 

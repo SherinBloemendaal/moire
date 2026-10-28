@@ -124,10 +124,6 @@ func quickExpected(_ dataset: Dataset) throws -> Int {
 }
 
 let scenarios: [Scenario] = [
-    // The 1.0 engine: one thread, FileManager walk, byte compare of every same-sized pair.
-    Scenario(name: "legacy.content", compare: { dataset in
-        try FolderComparison(left: dataset.left, right: dataset.right).differenceCount
-    }),
     Scenario(name: "engine.metadata", compare: engine(.metadata)),
     Scenario(name: "engine.quick", expected: quickExpected, compare: engine(.quick)),
     Scenario(name: "engine.binary", compare: engine(.binary)),

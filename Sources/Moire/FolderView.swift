@@ -5,6 +5,9 @@ struct FolderView: View {
     @Bindable var model: FolderModel
     /// Opens a pair of files in the text comparison. A missing side is `nil`.
     var openFiles: (URL?, URL?) -> Void
+    @State private var selection: Set<Int> = []
+    @State private var syncItems: [Int]?
+    @State private var showsFilters = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,8 +32,14 @@ struct FolderView: View {
             .padding(.vertical, 10)
 
             Group {
-                if model.comparison != nil {
-                    list
+                if let tree = model.tree, model.left != nil, model.right != nil {
+                    FolderOutline(
+                        tree: tree,
+                        version: model.version,
+                        differencesOnly: model.filter == .differences,
+                        selection: $selection,
+                        perform: perform
+                    )
                 } else {
                     placeholder
                 }
@@ -49,7 +58,10 @@ struct FolderView: View {
             model.open(urls)
             return true
         }
-        .alert("Could not compare the folders", isPresented: Binding(
+        .sheet(item: Binding(get: { syncItems.map(SyncRequest.init) }, set: { syncItems = $0?.items })) { request in
+            SyncSheet(model: model, items: request.items)
+        }
+        .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
         )) {
@@ -59,38 +71,19 @@ struct FolderView: View {
         }
     }
 
-    private var list: some View {
-        List(selection: $model.selection) {
-            ForEach(model.visibleItems) { item in
-                FolderRow(item: item, isCollapsed: model.collapsed.contains(item.path)) {
-                    withAnimation(.smooth(duration: 0.2)) { model.toggle(item) }
-                }
-                .tag(item.path)
-                .listRowSeparator(.hidden)
-            }
+    private func perform(_ action: FolderItemAction) {
+        switch action {
+        case .open(let item):
+            openFiles(model.url(of: item, on: .left), model.url(of: item, on: .right))
+        case .showInFinder(let items, let side):
+            model.showInFinder(items, side: side)
+        case .trash(let items, let side):
+            model.trash(items, side: side)
+        case .rename(let item, let side):
+            model.rename(item, side: side)
+        case .sync(let items):
+            syncItems = items
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
-        .contextMenu(forSelectionType: String.self) { paths in
-            if let path = paths.first, let item = model.comparison?.items.first(where: { $0.path == path }), !item.isDirectory {
-                Button("Compare Files") { open(item) }
-            }
-        } primaryAction: { paths in
-            guard let path = paths.first, let item = model.comparison?.items.first(where: { $0.path == path }) else { return }
-            if item.isDirectory {
-                withAnimation(.smooth(duration: 0.2)) { model.toggle(item) }
-            } else {
-                open(item)
-            }
-        }
-    }
-
-    private func open(_ item: FolderComparison.Item) {
-        guard let comparison = model.comparison else { return }
-        openFiles(
-            item.status == .rightOnly ? nil : comparison.left.appending(path: item.path),
-            item.status == .leftOnly ? nil : comparison.right.appending(path: item.path)
-        )
     }
 
     private var placeholder: some View {
@@ -100,9 +93,9 @@ struct FolderView: View {
                 Image(systemName: "folder.badge.questionmark")
                     .font(.system(size: 36))
                     .foregroundStyle(Theme.brand)
-                Text(model.isComparing ? "Comparing…" : "Choose or drop two folders")
+                Text("Choose or drop two folders")
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
-                Text("Every file is compared by its contents. Double-click a file to see what changed.")
+                Text("Moire compares every file in them, on all cores. Double-click a file to see what changed.")
                     .foregroundStyle(.secondary)
             }
             .padding(30)
@@ -113,23 +106,56 @@ struct FolderView: View {
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            if model.comparison != nil {
+            if model.isComparing {
+                ProgressLine(progress: model.progress, startedAt: model.startedAt)
+                Button("Stop", systemImage: "stop.fill") { model.stop() }
+                    .buttonStyle(.borderless)
+                    .help("Stop comparing and keep what was found so far")
+            } else if model.tree != nil, model.left != nil, model.right != nil {
                 Chip(text: "\(model.count(.different)) different", color: Theme.changed)
                 Chip(text: "\(model.count(.leftOnly)) left only", color: Theme.removed)
                 Chip(text: "\(model.count(.rightOnly)) right only", color: Theme.added)
                 Chip(text: "\(model.count(.identical)) identical", color: Theme.iris)
+                if model.count(.unreadable) > 0 {
+                    Chip(text: "\(model.count(.unreadable)) unreadable", color: Theme.removed, systemImage: "exclamationmark.triangle.fill")
+                }
+                if let finishedIn = model.finishedIn {
+                    Text(finishedIn.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow, maximumUnitCount: 2)))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
-            if model.isComparing {
-                ProgressView().controlSize(.mini)
-            }
+
             Spacer()
-            Toggle("Hidden Files", isOn: Binding(get: { !model.skipHidden }, set: { model.skipHidden = !$0 }))
-                .toggleStyle(.checkbox)
-                .help("Include files and folders whose name starts with a dot")
+
+            Picker("Compare", selection: Binding(get: { model.method }, set: { model.pick($0) })) {
+                Text("Metadata").tag(CompareMethod.metadata)
+                Text("Quick").tag(CompareMethod.quick)
+                Text("Binary").tag(CompareMethod.binary)
+                Text("Lines").tag(CompareMethod.lines)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Metadata: size and date, nothing is read. Quick: the first and last 64 KB. Binary: every byte. Lines: as text, with the ignore options.")
+
+            Button { showsFilters.toggle() } label: {
+                Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .buttonStyle(.borderless)
+            .popover(isPresented: $showsFilters, arrowEdge: .top) { FilterPopover(model: model) }
+            .help("Include and exclude masks, .gitignore, hidden files")
+
             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless)
                 .help("Compare again")
                 .disabled(model.left == nil || model.right == nil)
+
+            Button { syncItems = Array(selection) } label: { Image(systemName: "arrow.triangle.2.circlepath") }
+                .buttonStyle(.borderless)
+                .help("Sync the folders, or the selected items")
+                .disabled(model.tree == nil || model.isComparing || model.left == nil || model.right == nil)
+
             Picker("Show", selection: $model.filter) {
                 Text("All").tag(FolderModel.Filter.all)
                 Text("Differences").tag(FolderModel.Filter.differences)
@@ -143,6 +169,90 @@ struct FolderView: View {
     }
 }
 
+private struct SyncRequest: Identifiable {
+    let items: [Int]
+    var id: [Int] { items }
+}
+
+/// Live numbers while a comparison runs.
+private struct ProgressLine: View {
+    let progress: FolderProgress?
+    let startedAt: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            HStack(spacing: 8) {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .frame(width: 120)
+                Text(text(now: context.date))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var fraction: Double {
+        guard let progress, progress.bytesToRead > 0 else { return 0 }
+        return Double(progress.bytesRead) / Double(progress.bytesToRead)
+    }
+
+    private func text(now: Date) -> String {
+        guard let progress else { return "Starting…" }
+        var parts = ["\(progress.itemsFound.formatted()) items"]
+        if progress.filesToRead > 0 {
+            parts.append("read \(progress.filesRead.formatted()) of \(progress.filesToRead.formatted()) files")
+        }
+        if let startedAt {
+            let seconds = max(now.timeIntervalSince(startedAt), 0.001)
+            let rate = Double(progress.bytesRead) / seconds
+            if rate > 0 {
+                parts.append(ByteCountFormatter.string(fromByteCount: Int64(rate), countStyle: .file) + "/s")
+                let left = Double(progress.bytesToRead - progress.bytesRead) / rate
+                if left > 1 {
+                    parts.append(Duration.seconds(left).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)) + " left")
+                }
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct FilterPopover: View {
+    @Bindable var model: FolderModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Filters").font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Only files matching").font(.caption).foregroundStyle(.secondary)
+                TextField("*.swift, *.md", text: $model.includeText)
+                    .onSubmit { model.applyMasks() }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Leave out").font(.caption).foregroundStyle(.secondary)
+                TextField("node_modules/, *.log, build/", text: $model.excludeText)
+                    .onSubmit { model.applyMasks() }
+            }
+            Text("Masks work like .gitignore: * and ? within a name, ** across folders, a trailing / for folders only.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Follow .gitignore files", isOn: $model.useGitignore)
+            Toggle("Include hidden files", isOn: Binding(get: { !model.skipHidden }, set: { model.skipHidden = !$0 }))
+            HStack {
+                Spacer()
+                Button("Apply") { model.applyMasks() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .padding(16)
+        .frame(width: 320)
+    }
+}
+
 private struct FolderCard: View {
     let model: FolderModel
     let side: SideID
@@ -150,20 +260,32 @@ private struct FolderCard: View {
 
     var body: some View {
         let url = side == .left ? model.left : model.right
+        let volume = side == .left ? model.leftVolume : model.rightVolume
         Button { model.choose(side) } label: {
             HStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(side == .left ? Theme.removed.opacity(0.14) : Theme.added.opacity(0.14))
-                    Image(systemName: "folder.fill")
+                    Image(systemName: volume?.isLocal == false ? "network" : "folder.fill")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(side == .left ? Theme.removed : Theme.added)
                 }
                 .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(url?.lastPathComponent ?? "Choose the \(side.name.lowercased()) folder…")
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(url?.lastPathComponent ?? "Choose the \(side.name.lowercased()) folder…")
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        if let volume, !volume.isLocal {
+                            Text("Network disk")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(Theme.cyan)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(Theme.cyan.opacity(0.14), in: Capsule())
+                                .help("Compared by size and date unless you pick another method: reading every file over the network is slow.")
+                        }
+                    }
                     Text(url.map { ($0.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath } ?? "Click, or drop a folder here")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -192,71 +314,155 @@ private struct FolderCard: View {
     }
 }
 
-private struct FolderRow: View {
-    let item: FolderComparison.Item
-    let isCollapsed: Bool
-    let toggle: () -> Void
+/// Choose how to sync, look at the plan, then run it.
+private struct SyncSheet: View {
+    let model: FolderModel
+    let items: [Int]
+    @Environment(\.dismiss) private var dismiss
+    @State private var mode = FolderSync.Mode.update
+    @State private var direction = FolderSync.Direction.leftToRight
+    @State private var done: Int?
+    @State private var failures: [FolderSync.Failure]?
+    /// Worked out again only when the mode or direction changes, not on every progress update.
+    @State private var plan: FolderSync.Plan?
 
-    var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 4) {
-                if item.isDirectory {
-                    Button(action: toggle) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
-                            .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                            .frame(width: 14, height: 14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                } else {
-                    Color.clear.frame(width: 14, height: 14)
-                }
-                Image(systemName: item.isDirectory ? "folder.fill" : "doc.text")
-                    .foregroundStyle(item.isDirectory ? Theme.iris : .secondary)
-                    .frame(width: 18)
-                Text(item.name)
-                    .lineLimit(1)
-                    .foregroundStyle(item.status == .identical ? .secondary : .primary)
-            }
-            .padding(.leading, Double(item.depth) * 16)
-            Spacer(minLength: 12)
-            Text(size(item.leftSize))
-                .frame(width: 80, alignment: .trailing)
-                .foregroundStyle(.secondary)
-            Text(size(item.rightSize))
-                .frame(width: 80, alignment: .trailing)
-                .foregroundStyle(.secondary)
-            StatusPill(status: item.status)
-                .frame(width: 96, alignment: .trailing)
-        }
-        .font(.system(size: 12))
-        .monospacedDigit()
-        .padding(.vertical, 1)
+    private struct Choice: Hashable {
+        let mode: FolderSync.Mode
+        let direction: FolderSync.Direction
     }
 
-    private func size(_ bytes: Int64?) -> String {
-        guard let bytes, !item.isDirectory else { return "" }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(items.isEmpty ? "Sync the Folders" : "Sync \(items.count == 1 ? "1 Item" : "\(items.count) Items")")
+                .font(.title3.weight(.semibold))
+
+            Picker("Direction", selection: $direction) {
+                Label("Left to Right", systemImage: "arrow.right").tag(FolderSync.Direction.leftToRight)
+                Label("Right to Left", systemImage: "arrow.left").tag(FolderSync.Direction.rightToLeft)
+                Label("Both Ways", systemImage: "arrow.left.arrow.right").tag(FolderSync.Direction.both)
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Mode", selection: $mode) {
+                Text("Update").tag(FolderSync.Mode.update)
+                Text("Mirror").tag(FolderSync.Mode.mirror)
+            }
+            .pickerStyle(.segmented)
+            .disabled(direction == .both)
+
+            Text(explanation)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let plan {
+                HStack(spacing: 8) {
+                    Chip(text: "\(plan.copies) to copy", color: Theme.added)
+                    Chip(text: ByteCountFormatter.string(fromByteCount: plan.bytesToCopy, countStyle: .file), color: Theme.iris)
+                    Chip(text: "\(plan.trashes) to Trash", color: Theme.removed)
+                }
+                List(Array(plan.actions.prefix(500).enumerated()), id: \.offset) { _, action in
+                    ActionRow(action: action)
+                }
+                .frame(minHeight: 180)
+                if plan.actions.count > 500 {
+                    Text("And \(plan.actions.count - 500) more.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            if let failures {
+                if failures.isEmpty {
+                    Label("Done. The folders are compared again.", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.added)
+                } else {
+                    Label("\(failures.count) actions failed:", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.removed)
+                    ScrollView {
+                        Text(failures.map { "\($0.action.path): \($0.message)" }.joined(separator: "\n"))
+                            .font(.caption.monospaced())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 120)
+                }
+            }
+
+            HStack {
+                if let done, let plan, failures == nil {
+                    ProgressView(value: Double(done), total: Double(max(plan.actions.count, 1)))
+                }
+                Spacer()
+                Button(failures == nil ? "Cancel" : "Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                if failures == nil {
+                    Button("Sync") { run() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(plan?.actions.isEmpty ?? true || done != nil)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .task(id: Choice(mode: mode, direction: direction)) {
+            guard done == nil else { return }
+            plan = model.plan(mode: mode, direction: direction, selection: Set(items))
+        }
+    }
+
+    private var explanation: String {
+        switch (direction, mode) {
+        case (.both, _):
+            "Copies what is missing on either side, and the newer version of every file that differs. Files that differ but have the same date are left alone."
+        case (_, .update):
+            "Copies what is missing on the \(target) side and replaces older files there. Nothing is deleted, and newer files on the \(target) side are kept."
+        case (_, .mirror):
+            "Makes the \(target) side an exact copy. Items only the \(target) side has go to the Trash, so you can put them back."
+        }
+    }
+
+    private var target: String { direction == .rightToLeft ? "left" : "right" }
+
+    private func run() {
+        guard let plan else { return }
+        done = 0
+        Task {
+            failures = await model.run(plan) { done = $0 }
+        }
     }
 }
 
-private struct StatusPill: View {
-    let status: FolderComparison.Status
+private struct ActionRow: View {
+    let action: FolderSync.Action
 
     var body: some View {
-        let (text, color): (String, Color) = switch status {
-        case .identical: ("Identical", Theme.gutterText)
-        case .different: ("Different", Theme.changed)
-        case .leftOnly: ("Left only", Theme.removed)
-        case .rightOnly: ("Right only", Theme.added)
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color).frame(width: 16)
+            Text(action.path).lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Text(detail).foregroundStyle(.secondary).font(.caption)
         }
-        Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.opacity(status == .identical ? 0.08 : 0.14), in: Capsule())
+        .font(.system(size: 12))
+    }
+
+    private var icon: String {
+        switch action {
+        case .copy(_, let toRight, _): toRight ? "arrow.right.doc.on.clipboard" : "arrow.left.doc.on.clipboard"
+        case .createFolder: "folder.badge.plus"
+        case .trash: "trash"
+        }
+    }
+
+    private var color: Color {
+        switch action {
+        case .copy: Theme.added
+        case .createFolder: Theme.iris
+        case .trash: Theme.removed
+        }
+    }
+
+    private var detail: String {
+        switch action {
+        case let .copy(_, toRight, bytes): "\(toRight ? "to right" : "to left") · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        case .createFolder(_, let onRight): "new folder on the \(onRight ? "right" : "left")"
+        case .trash(_, let onRight): "from the \(onRight ? "right" : "left")"
+        }
     }
 }

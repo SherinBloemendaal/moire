@@ -260,33 +260,6 @@ struct FolderEngineContentTests {
         #expect(statuses(tree) == ["secret.txt": .unreadable])
         #expect(tree.error(at: 1) != nil)
     }
-
-    @Test func `agrees with the 1.0 engine on a mixed tree`() throws {
-        var leftFiles: [String: String] = [:]
-        var rightFiles: [String: String] = [:]
-        for index in 0..<1500 {
-            let path = "d\(index % 23)/e\(index % 4)/f\(index).txt"
-            if index % 50 != 3 { leftFiles[path] = String(repeating: "x", count: index % 300) }
-            if index % 50 != 9 { rightFiles[path] = String(repeating: index % 17 == 0 ? "y" : "x", count: index % 300 + (index % 31 == 0 ? 1 : 0)) }
-        }
-        let left = try makeTree(leftFiles)
-        let right = try makeTree(rightFiles)
-        let legacy = try FolderComparison(left: left, right: right)
-        let tree = try compare(left, right, .binary)
-        let legacyStatuses = Dictionary(uniqueKeysWithValues: legacy.items.map { ($0.path, $0.status) })
-        for item in 1..<tree.count {
-            let expected: FolderTree.Status = switch legacyStatuses[tree.path(of: item)] {
-            case .identical: .identical
-            case .different: .different
-            case .leftOnly: .leftOnly
-            case .rightOnly: .rightOnly
-            case nil: .pending
-            }
-            #expect(tree.status(of: item) == expected, "\(tree.path(of: item))")
-        }
-        #expect(tree.count - 1 == legacy.items.count)
-        #expect(tree.differenceCount == legacy.differenceCount)
-    }
 }
 
 struct FolderEngineProgressTests {
