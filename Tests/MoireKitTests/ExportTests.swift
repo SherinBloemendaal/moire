@@ -2,8 +2,8 @@ import Foundation
 @testable import MoireKit
 import Testing
 
-private func patch(_ left: String, _ right: String, context: Int = 3) -> String {
-    UnifiedDiff.patch(from: TextDocument(left), to: TextDocument(right), leftLabel: "a/file.txt", rightLabel: "b/file.txt", context: context)
+private func patch(_ left: String, _ right: String, name: String = "file.txt", context: Int = 3) -> String {
+    UnifiedDiff.patch(from: TextDocument(left), to: TextDocument(right), leftLabel: "a/\(name)", rightLabel: "b/\(name)", context: context)
 }
 
 /// Runs a tool in `directory` and returns its exit status and output.
@@ -23,13 +23,13 @@ private func run(_ tool: String, _ arguments: [String], in directory: URL) throw
 }
 
 /// Writes `left` to a temporary file, applies the patch to it with `tool`, and returns the file.
-private func applied(_ left: String, _ right: String, tool: String) throws -> String {
+private func applied(_ left: String, _ right: String, name: String = "file.txt", tool: String) throws -> String {
     let directory = FileManager.default.temporaryDirectory.appending(path: "moire-patch-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let file = directory.appending(path: "file.txt")
+    let file = directory.appending(path: name)
     try Data(left.utf8).write(to: file)
-    try Data(patch(left, right).utf8).write(to: directory.appending(path: "change.patch"))
+    try Data(patch(left, right, name: name).utf8).write(to: directory.appending(path: "change.patch"))
 
     let result = tool == "git"
         ? try run("/usr/bin/git", ["apply", "change.patch"], in: directory)
@@ -123,6 +123,12 @@ private let pairs: [(String, String)] = [
     func `git apply turns the left file into the right one`(index: Int) throws {
         let (left, right) = pairs[index]
         #expect(try applied(left, right, tool: "git") == right)
+    }
+
+    @Test func `a name with spaces ends in a tab so patch finds the file`() throws {
+        #expect(patch("a\n", "b\n", name: "my file.txt").hasPrefix("--- a/my file.txt\t\n+++ b/my file.txt\t\n"))
+        #expect(try applied("a\nb\n", "a\nB\n", name: "my file.txt", tool: "patch") == "a\nB\n")
+        #expect(try applied("a\nb\n", "a\nB\n", name: "my file.txt", tool: "git") == "a\nB\n")
     }
 
     @Test func `random edits survive a round trip through patch`() throws {

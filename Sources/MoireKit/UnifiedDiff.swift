@@ -40,7 +40,7 @@ public enum UnifiedDiff {
         }
         guard !groups.isEmpty else { return "" }
 
-        var output = "--- \(leftLabel)\n+++ \(rightLabel)\n"
+        var output = "--- \(header(leftLabel))\n+++ \(header(rightLabel))\n"
         for group in groups {
             let low = max(0, group.lowerBound - context)
             let high = min(steps.count - 1, group.upperBound + context)
@@ -57,6 +57,12 @@ public enum UnifiedDiff {
             }
         }
         return output
+    }
+
+    /// `patch` reads a name up to the first space unless a tab ends it, the way GNU diff ends
+    /// the name before its date.
+    private static func header(_ label: String) -> String {
+        label.contains(" ") ? label + "\t" : label
     }
 
     /// `start,count` with a 1-based start. An empty range names the line before it, and a
