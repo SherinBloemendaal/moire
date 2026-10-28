@@ -8,6 +8,8 @@ let package = Package(
         .executable(name: "Moire", targets: ["Moire"]),
         .library(name: "MoireKit", targets: ["MoireKit"]),
         .executable(name: "moire-bench", targets: ["MoireBench"]),
+        // Shipped inside the app as Contents/Helpers/moire.
+        .executable(name: "moire-cli", targets: ["MoireCLI"]),
     ],
     targets: [
         .target(name: "MoireKit"),
@@ -17,6 +19,7 @@ let package = Package(
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .executableTarget(name: "MoireBench", dependencies: ["MoireKit"]),
+        .executableTarget(name: "MoireCLI", dependencies: ["MoireKit"]),
         .testTarget(name: "MoireKitTests", dependencies: ["MoireKit"]),
     ]
 )

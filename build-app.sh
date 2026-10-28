@@ -13,12 +13,16 @@ if [ "${UNIVERSAL:-0}" = "1" ]; then
 fi
 
 swift build -c release --product Moire ${arch_flags[@]+"${arch_flags[@]}"}
-binary="$(swift build -c release --product Moire ${arch_flags[@]+"${arch_flags[@]}"} --show-bin-path)/Moire"
+swift build -c release --product moire-cli ${arch_flags[@]+"${arch_flags[@]}"}
+bin_path="$(swift build -c release --product Moire ${arch_flags[@]+"${arch_flags[@]}"} --show-bin-path)"
+binary="$bin_path/Moire"
 
 app="build/Moire.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Helpers"
 cp "$binary" "$app/Contents/MacOS/Moire"
+# The command line tool; link it into your PATH to use it as `moire`.
+cp "$bin_path/moire-cli" "$app/Contents/Helpers/moire"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 
