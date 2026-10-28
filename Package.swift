@@ -21,6 +21,8 @@ let package = Package(
         .executableTarget(name: "MoireBench", dependencies: ["MoireKit"]),
         .executableTarget(name: "MoireCLI", dependencies: ["MoireKit"]),
         .testTarget(name: "MoireKitTests", dependencies: ["MoireKit"], exclude: ["Fixtures"]),
+        // Runs the built moire-cli; the dependency makes sure it is built before the tests.
+        .testTarget(name: "MoireCLITests", dependencies: ["MoireCLI"]),
         .testTarget(
             name: "MoireTests",
             dependencies: ["Moire", "MoireKit"],
