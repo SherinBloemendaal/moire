@@ -135,10 +135,14 @@ public enum FileKind: Sendable, Hashable {
         bytes.starts(with: [0xEF, 0xBB, 0xBF]) || bytes.starts(with: [0xFF, 0xFE]) || bytes.starts(with: [0xFE, 0xFF])
     }
 
+    /// ImageIO guesses formats without a header (TGA) for almost any data, so a type alone says
+    /// little: the image must also report its size.
     private static func imageIOCanRead(_ url: URL) -> Bool {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetType(source) != nil else {
-            return false
-        }
-        return CGImageSourceGetCount(source) > 0
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetType(source) != nil,
+              CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int
+        else { return false }
+        return width > 0 && height > 0
     }
 }

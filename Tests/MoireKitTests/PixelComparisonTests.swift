@@ -67,6 +67,14 @@ private func write(_ image: CGImage, as type: String, to url: URL) throws {
         #expect(FileKind.detect(png) == .image)
     }
 
+    @Test func `binary data that ImageIO only guesses is not an image`() throws {
+        // ImageIO calls almost any data a TGA image; without a size it is not one.
+        let url = FileManager.default.temporaryDirectory.appending(path: "moire-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data((0..<4096).map { UInt8($0 % 251) }).write(to: url)
+        #expect(FileKind.detect(url) == .binary)
+    }
+
     @Test func `formats without a known signature are found through ImageIO`() throws {
         let type = "com.truevision.tga-image"
         let supported = (CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []).contains(type)
