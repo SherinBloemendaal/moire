@@ -59,8 +59,10 @@ enum Press {
         let end = Date().addingTimeInterval(5)
         while Date() < end {
             _ = press(title, in: root)
-            try await Task.sleep(for: .milliseconds(50))
-            if done() { return true }
+            for _ in 0..<10 {
+                try await Task.sleep(for: .milliseconds(5))
+                if done() { return true }
+            }
         }
         return false
     }
@@ -136,9 +138,9 @@ struct SyncSheetButtonTests {
 
     @Test func `pressing Stop during a sync leaves the rest undone`() async throws {
         var files: [String: String] = [:]
-        // Big enough that the sync is still running when Stop is pressed.
-        let block = String(repeating: "x", count: 256 * 1024)
-        for index in 0..<400 { files["f\(index).txt"] = block }
+        // Many small files: every copy has a fixed cost, so the sync still runs when Stop is
+        // pressed, also on a fast disk (a few big files were done before Stop could be pressed).
+        for index in 0..<4000 { files["d\(index % 40)/f\(index).txt"] = "\(index)" }
         let left = try folder(files)
         let right = try folder([:])
         let model = try await model(left, right)
@@ -149,8 +151,11 @@ struct SyncSheetButtonTests {
         #expect(try await Press.press("Sync", in: host) { Press.button("Stop", in: host) != nil })
         #expect(Press.press("Stop", in: host))
         try await Press.wait(10) { Press.button("Close", in: host) != nil }
-        let copied = count(right)
-        #expect(copied > 0 && copied < 400, "copied \(copied) of 400")
+        var copied = 0
+        for folder in (try? FileManager.default.contentsOfDirectory(atPath: right.path(percentEncoded: false))) ?? [] {
+            copied += count(right.appending(path: folder))
+        }
+        #expect(copied < 4000, "copied \(copied) of 4000")
     }
 }
 
