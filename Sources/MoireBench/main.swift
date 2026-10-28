@@ -5,6 +5,7 @@ import MoireKit
 //
 //   moire-bench run [--files 100000] [--large] [--repeat 3] [--root PATH]
 //                   [--only PREFIX] [--json OUT] [--baseline FILE] [--max-regression 0.5]
+//   moire-bench compare --base BASE.json [--base …] --head HEAD.json [--head …] [--max-regression 0.5]
 //   moire-bench clean [--root PATH]
 //
 // Every scenario also checks the engine's answer against what the generator changed, so a fast
@@ -38,6 +39,9 @@ struct Options {
     var maxRegression = 0.5
     /// Runs only the scenarios whose name starts with this.
     var only: String?
+    /// For `compare`: reports of the commit compared against, and of the commit being checked.
+    var bases: [URL] = []
+    var heads: [URL] = []
 
     init(_ arguments: [String]) throws {
         var arguments = arguments[...]
@@ -58,11 +62,14 @@ struct Options {
             case "--json": json = URL(filePath: try value(flag))
             case "--baseline": baseline = URL(filePath: try value(flag))
             case "--only": only = try value(flag)
+            case "--base": bases.append(URL(filePath: try value(flag)))
+            case "--head": heads.append(URL(filePath: try value(flag)))
             case "--max-regression": maxRegression = try Double(value(flag)).orThrow(BenchError.usage("--max-regression needs a number"))
             default: throw BenchError.usage("unknown option \(flag)")
             }
         }
         guard repeats >= 1, files >= 200 else { throw BenchError.usage("--repeat must be at least 1 and --files at least 200") }
+        if command == "compare", bases.isEmpty || heads.isEmpty { throw BenchError.usage("compare needs at least one --base and one --head report") }
     }
 }
 
@@ -256,16 +263,51 @@ func run(_ options: Options) throws {
     }
 }
 
+/// Compares two commits timed on the same machine in the same session, so a machine that is
+/// slower overall slows both alike. Each side counts its fastest run over all its reports: a slow
+/// stretch of the machine only ever adds time, a real slowdown is there in every run.
+func compare(_ options: Options) throws {
+    func fastest(_ urls: [URL]) throws -> [String: Double] {
+        var fastest: [String: Double] = [:]
+        for url in urls {
+            let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: url))
+            for (name, scenario) in report.scenarios {
+                let best = scenario.runs.min() ?? scenario.seconds
+                fastest[name] = min(fastest[name] ?? best, best)
+            }
+        }
+        return fastest
+    }
+    let base = try fastest(options.bases)
+    let head = try fastest(options.heads)
+    var slower: [String] = []
+    for (name, before) in base.sorted(by: { $0.key < $1.key }) {
+        guard let after = head[name] else {
+            print(String(format: "%-36@ only in the base", name as NSString))
+            continue
+        }
+        let ratio = after / before
+        let gated = before >= minimumGatedSeconds
+        print(String(format: "%-36@ %8.3f s  base %8.3f s  %+6.0f%%%@", name as NSString, after, before, (ratio - 1) * 100, gated ? "" : "  (too short to gate)"))
+        if gated, ratio > 1 + options.maxRegression {
+            slower.append(String(format: "  %@: %.3f s, base %.3f s", name, after, before))
+        }
+    }
+    if !slower.isEmpty { throw BenchError.regression(slower) }
+}
+
 do {
     let options = try Options(Array(CommandLine.arguments.dropFirst()))
     switch options.command {
     case "run":
         try run(options)
+    case "compare":
+        try compare(options)
     case "clean":
         try? FileManager.default.removeItem(at: options.root)
         print("Removed \(options.root.path(percentEncoded: false))")
     default:
-        throw BenchError.usage("commands are run and clean")
+        throw BenchError.usage("commands are run, compare and clean")
     }
 } catch {
     FileHandle.standardError.write(Data("moire-bench: \(error)\n".utf8))

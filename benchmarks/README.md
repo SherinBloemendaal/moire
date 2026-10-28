@@ -19,6 +19,20 @@ file cache: the first, untimed run reads everything once.
 | `legacy-2000.json`, `legacy-5000.json`, `legacy-10000.json` | The 1.0 engine, measured before it was removed. Its time grows with the square of the file count (sorting rebuilt a lookup table on every comparison), so 100,000 files would take about half an hour per run. |
 | `engine-100k-m2max.json` | The new engine on an M2 Max (12 cores, 64 GB), 100,000 files. |
 | `engine-1m-m2max.json` | The same with 1,000,000 files (about 4.7 GB), past what macOS keeps in its file cache. |
-| `baseline-ci.json` | The CI baseline, from the `benchmark` job on GitHub (Apple M1, virtual, 3 cores). A run fails when a scenario of 0.5 s or more takes over 50% longer; shorter ones vary too much on those machines (the same 0.1 s scenario measured from 0.06 s to 0.23 s). A scenario over the limit is timed up to two more times and keeps its fastest result, because those runners have slow stretches of several seconds: a real slowdown is slow every time. |
+
+## In CI
+
+The `benchmark` job does not compare with saved numbers: GitHub's runners (Apple M1, virtual,
+3 cores) differ in speed by 1.5 to 2 times from one run to the next, so a fixed baseline failed on
+a slow runner with no change to the engine. The job builds `moire-bench` for this commit and for
+the one before it (the pull request's base, or main before the push), times both on the same runner
+three times in turns, and runs `moire-bench compare` on the reports. Each commit keeps its fastest
+run per scenario, since a slow stretch of the runner only ever adds time. The build fails when a
+scenario of 0.5 s or more is over 50% slower than in the commit before; shorter ones vary too much
+on those machines (the same 0.1 s scenario measured from 0.06 s to 0.23 s).
+
+```bash
+.build/release/moire-bench compare --base base-1.json --base base-2.json --head head-1.json --head head-2.json
+```
 
 `MOIRE_FOLDER_THREADS` and `MOIRE_CONTENT_THREADS` override the thread counts, for tuning.
