@@ -36,6 +36,9 @@ struct Failure: Error, CustomStringConvertible {
     let description: String
 }
 
+/// Asking for help is not trouble: the usage goes to standard output with status 0.
+struct HelpRequested: Error {}
+
 struct Arguments {
     var command = ""
     var paths: [String] = []
@@ -59,7 +62,8 @@ struct Arguments {
         var rest = raw[...]
         guard let command = rest.popFirst() else { throw Failure(description: usage) }
         guard ["compare", "sync"].contains(command) else {
-            throw Failure(description: command == "--help" || command == "-h" ? usage : "moire: unknown command \(command)\n\n\(usage)")
+            if command == "--help" || command == "-h" { throw HelpRequested() }
+            throw Failure(description: "moire: unknown command \(command)\n\n\(usage)")
         }
         self.command = command
         func value(_ flag: String) throws -> String {
@@ -99,7 +103,7 @@ struct Arguments {
                 }
             case "--dry-run": dryRun = true
             case "--yes": yes = true
-            case "--help", "-h": throw Failure(description: usage)
+            case "--help", "-h": throw HelpRequested()
             default:
                 guard !argument.hasPrefix("--") else { throw Failure(description: "moire: unknown option \(argument)") }
                 paths.append(argument)
@@ -251,6 +255,9 @@ func main() -> Int32 {
         )
         try write(FolderReport.render(tree, format: arguments.format, options: options), to: arguments.output)
         return tree.status(of: 0) == .identical ? 0 : 1
+    } catch is HelpRequested {
+        print(usage)
+        return 0
     } catch let failure as Failure {
         FileHandle.standardError.write(Data((failure.description + "\n").utf8))
         return 2
