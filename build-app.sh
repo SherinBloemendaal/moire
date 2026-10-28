@@ -31,5 +31,7 @@ if [ -n "${VERSION:-}" ]; then
     plutil -replace CFBundleVersion -string "$VERSION" "$app/Contents/Info.plist"
 fi
 
+# Nested code is signed first; a universal build leaves the helper without a signature.
+codesign --force --sign - "$app/Contents/Helpers/moire"
 codesign --force --sign - "$app"
 echo "Built $app"
