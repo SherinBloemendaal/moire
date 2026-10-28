@@ -111,7 +111,7 @@ private struct HunkBlock: View {
         }
     }
 
-    private func copyLines(_ lines: ArraySlice<String>) {
+    private func copyLines(_ lines: Slice<Lines>) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }

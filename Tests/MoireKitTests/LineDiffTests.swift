@@ -191,3 +191,67 @@ struct FileContentTests {
         }
     }
 }
+
+/// The hunks of the plain generic Myers over whole lines, as a reference for `LineDiff`.
+private func referenceHunks(_ left: [String], _ right: [String]) -> [Hunk] {
+    var hunks: [Hunk] = []
+    var l = 0
+    var r = 0
+    var deleted = 0
+    var inserted = 0
+    func flush() {
+        if deleted + inserted > 0 { hunks.append(Hunk(left: (l - deleted)..<l, right: (r - inserted)..<r)) }
+        deleted = 0
+        inserted = 0
+    }
+    for operation in Myers.diff(left, right) {
+        switch operation {
+        case .equal:
+            flush()
+            l += 1
+            r += 1
+        case .delete:
+            deleted += 1
+            l += 1
+        case .insert:
+            inserted += 1
+            r += 1
+        }
+    }
+    flush()
+    return hunks
+}
+
+struct LineDiffRowTests {
+    @Test func `finds the same hunks as Myers on whole lines`() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<300 {
+            let left = (0..<Int.random(in: 0...30, using: &generator)).map { _ in "line \(Int.random(in: 0...6, using: &generator))" }
+            let right = (0..<Int.random(in: 0...30, using: &generator)).map { _ in "line \(Int.random(in: 3...9, using: &generator))" }
+            let diff = LineDiff(left: TextDocument(lines: left), right: TextDocument(lines: right))
+            #expect(diff.hunks == referenceHunks(left, right), "\(left) \(right)")
+        }
+    }
+
+    @Test func `works out rows from the hunks`() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<200 {
+            let left = (0..<Int.random(in: 0...25, using: &generator)).map { _ in "\(Int.random(in: 0...5, using: &generator))" }
+            let right = (0..<Int.random(in: 0...25, using: &generator)).map { _ in "\(Int.random(in: 0...5, using: &generator))" }
+            let diff = LineDiff(left: TextDocument(lines: left), right: TextDocument(lines: right))
+            let rows = Array(diff.rows)
+            // Every line shows up exactly once, in order, on its own side.
+            #expect(rows.compactMap(\.left) == Array(left.indices))
+            #expect(rows.compactMap(\.right) == Array(right.indices))
+            for (index, row) in rows.enumerated() {
+                if let line = row.left { #expect(diff.row(ofLine: line, on: .left) == index) }
+                if let line = row.right { #expect(diff.row(ofLine: line, on: .right) == index) }
+                #expect(diff.hunk(containingRow: index) == row.hunk)
+                if row.kind == .same, let l = row.left, let r = row.right { #expect(left[l] == right[r]) }
+            }
+            for (index, start) in diff.hunkRows.enumerated() {
+                #expect(rows[start].hunk == index)
+            }
+        }
+    }
+}
