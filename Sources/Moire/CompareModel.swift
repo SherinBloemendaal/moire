@@ -106,6 +106,10 @@ final class CompareModel {
     }
 
     var isEditing = false
+    /// Text taken from documents: shown and compared, never changed or saved.
+    var isReadOnly = false
+    /// How the files are shown: as text, or as hex, an image, a table and so on.
+    let fileView = FileViewModel()
     private(set) var diff: LineDiff?
     private(set) var displayItems: [DisplayItem] = []
     private(set) var isComputing = false
@@ -179,7 +183,7 @@ final class CompareModel {
     var hasFiles: Bool { left.url != nil || right.url != nil }
 
     func setText(_ text: String, on side: SideID) {
-        guard !self[side].isBinary, self[side].text != text else { return }
+        guard !isReadOnly, !self[side].isBinary, self[side].text != text else { return }
         self[side].content = .text(text)
         self[side].isDirty = self[side].url != nil
     }
@@ -284,7 +288,7 @@ final class CompareModel {
 
     /// Copies a change over to the other side. `toRight` copies the left version to the right.
     func copy(hunk index: Int, toRight: Bool) {
-        guard let diff, diff.hunks.indices.contains(index) else { return }
+        guard !isReadOnly, let diff, diff.hunks.indices.contains(index) else { return }
         let target: SideID = toRight ? .right : .left
         setText(diff.copying(hunk: index, toRight: toRight).text, on: target)
         // The next change now sits where this one was.
@@ -304,6 +308,7 @@ final class CompareModel {
     // MARK: Diffing
 
     private func sidesChanged(oldValue: Side, newValue: Side) {
+        fileView.update(left: left, right: right)
         guard oldValue.content != newValue.content else { return }
         // Typing recomputes after a short pause; opening or merging recomputes right away.
         scheduleDiff(delay: isEditing ? .milliseconds(150) : .zero)

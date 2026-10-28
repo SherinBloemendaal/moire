@@ -15,13 +15,17 @@ struct CompareView: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
                     .padding(.bottom, 10)
-                content
-                    .background(Theme.pane, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.paneBorder))
-                    .padding(.horizontal, 14)
-                StatusBar(model: model)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
+                if model.fileView.isSpecial, !model.isEditing {
+                    FileKindView(model: model)
+                } else {
+                    content
+                        .background(Theme.pane, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.paneBorder))
+                        .padding(.horizontal, 14)
+                    StatusBar(model: model)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                }
             }
         }
         .background(Theme.window)

@@ -92,6 +92,10 @@ struct MoireCommands: Commands {
 
     private var compare: CompareModel { state.compare }
     private var isText: Bool { state.mode == .text }
+    private var files: FileViewModel { compare.fileView }
+    /// Hex, image, table, document text or archive instead of the text comparison.
+    private var isSpecial: Bool { isText && files.isSpecial && !compare.isEditing }
+    private var changeCount: Int { isSpecial ? files.differenceCount : compare.hunkCount }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -119,19 +123,23 @@ struct MoireCommands: Commands {
                 .disabled(!compare.hasFiles)
         }
         CommandMenu("Compare") {
-            Button("Next Change") { compare.goToNextChange() }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.hunkCount == 0)
-            Button("Previous Change") { compare.goToPreviousChange() }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.hunkCount == 0)
+            Button("Next Change") {
+                if isSpecial { files.navigator?.goToNextDifference() } else { compare.goToNextChange() }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .disabled(!isText || changeCount == 0)
+            Button("Previous Change") {
+                if isSpecial { files.navigator?.goToPreviousDifference() } else { compare.goToPreviousChange() }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            .disabled(!isText || changeCount == 0)
             Divider()
             Button("Copy Change to Right") { compare.copyCurrentChange(toRight: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.currentHunk == nil)
+                .disabled(!isText || isSpecial || compare.currentHunk == nil)
             Button("Copy Change to Left") { compare.copyCurrentChange(toRight: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.currentHunk == nil)
+                .disabled(!isText || isSpecial || compare.currentHunk == nil)
             Divider()
             Button("Swap Sides") {
                 if isText { compare.swapSides() } else { state.folders.swapSides() }
@@ -139,9 +147,17 @@ struct MoireCommands: Commands {
             .keyboardShortcut("x", modifiers: [.command, .shift])
             Button(compare.isEditing ? "Show Differences" : "Edit Text") { compare.isEditing.toggle() }
                 .keyboardShortcut("e")
-                .disabled(!isText || compare.hasBinarySide)
+                .disabled(!isText || compare.hasBinarySide || !files.allowsEditing)
         }
         CommandGroup(after: .toolbar) {
+            Menu("View As") {
+                ForEach(FileView.allCases) { view in
+                    Toggle(view.title, isOn: Binding(get: { files.current == view }, set: { if $0 { files.chosen = view } }))
+                        .disabled(!files.available.contains(view))
+                }
+            }
+            .disabled(!isText || compare.isEmpty)
+            Divider()
             Button("Side by Side") { compare.layout = .sideBySide }
                 .keyboardShortcut("1", modifiers: [.command, .control])
             Button("Unified") { compare.layout = .unified }
