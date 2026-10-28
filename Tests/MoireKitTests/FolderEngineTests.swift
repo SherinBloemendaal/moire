@@ -284,33 +284,172 @@ struct FolderEngineProgressTests {
         #expect(progress.filesToRead > 0)
     }
 
-    @Test func `shows consistent snapshots while it runs`() async throws {
-        let left = try bigTree(changed: false)
-        let right = try bigTree(changed: true)
-        let engine = FolderEngine(left: left, right: right, settings: FolderCompareSettings(method: .binary, folderThreads: 1, contentThreads: 1))
+    @Test func `shows unfinished work and growing counts while it runs`() async throws {
+        var files: [String: String] = [:]
+        for index in 0..<12 { files["d\(index % 3)/f\(index).txt"] = "file \(index)" }
+        let left = try makeTree(files)
+        // Same size, so the changed file is read too.
+        files["d1/f4.txt"] = "fixe 4"
+        let right = try makeTree(files)
+        let gate = DispatchSemaphore(value: 0)
+        let engine = FolderEngine(
+            sources: { (GatedSource(inner: try LocalSource(left), gate: gate), try LocalSource(right)) },
+            settings: FolderCompareSettings(method: .binary, contentThreads: 1)
+        )
         let running = Task.detached { try engine.run() }
 
-        var sawPending = false
-        for _ in 0..<200 {
-            let snapshot = engine.snapshot()
-            for item in 0..<snapshot.count where snapshot.isDirectory(item) && snapshot.status(of: item) == .pending {
-                sawPending = true
+        // The folders are listed without the gate; every file read waits for it.
+        try await waitFor { engine.progress.foldersListed == 4 && engine.progress.filesToRead == 12 }
+        let open = engine.snapshot()
+        #expect(open.status(of: 0) == .pending)
+        #expect((1..<open.count).filter { open.isDirectory($0) }.allSatisfy { open.status(of: $0) == .pending })
+        #expect((1..<open.count).filter { !open.isDirectory($0) }.allSatisfy { open.status(of: $0) == .pending })
+        #expect(engine.progress.filesRead == 0)
+        #expect(engine.progress.bytesRead == 0)
+
+        var previous = engine.progress
+        for released in 1...6 {
+            gate.signal()
+            // Files and bytes are counted one after the other, so wait for both.
+            try await waitFor { engine.progress.filesRead == released && engine.progress.bytesRead > previous.bytesRead }
+            let now = engine.progress
+            #expect(now.filesRead == released)
+            #expect(now.filesToRead == 12)
+            previous = now
+        }
+        let half = engine.snapshot()
+        let decided = (1..<half.count).filter { !half.isDirectory($0) && half.status(of: $0) != .pending }
+        #expect(decided.count == 6)
+        // Which files come first depends on the threads, so each folder is checked against its own files.
+        #expect(decided.contains { half.status(of: $0) == .identical })
+        for folder in [0] + (1..<half.count).filter({ half.isDirectory($0) }) {
+            let inside = half.children(of: folder).map { half.status(of: $0) }
+            let expected: FolderTree.Status = inside.contains(.different) ? .different : inside.contains(.pending) ? .pending : .identical
+            #expect(half.status(of: folder) == expected, "\(half.path(of: folder))")
+        }
+        // A folder is never called identical while something inside it is still open.
+        for item in 0..<half.count where half.status(of: item) == .pending {
+            var parent = half.parent(of: item)
+            while let current = parent {
+                #expect(half.status(of: current) != .identical)
+                parent = half.parent(of: current)
             }
-            // A folder is never called identical while something inside it is still open.
-            for item in 0..<snapshot.count where snapshot.status(of: item) == .pending {
-                var parent = snapshot.parent(of: item)
-                while let current = parent {
-                    #expect(snapshot.status(of: current) != .identical)
-                    parent = snapshot.parent(of: current)
-                }
-            }
-            if snapshot.status(of: 0) != .pending { break }
         }
 
+        for _ in 0..<6 { gate.signal() }
         let final = try await running.value
-        #expect(engine.snapshot().differenceCount == final.differenceCount)
+        #expect(engine.progress.filesRead == 12)
+        #expect(final.differenceCount == 1)
         #expect((0..<final.count).allSatisfy { final.status(of: $0) != .pending })
-        _ = sawPending
+    }
+
+    private func waitFor(_ condition: () -> Bool) async throws {
+        for _ in 0..<1000 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(condition())
+    }
+}
+
+/// A local folder whose file reads each wait for one signal of `gate`.
+private struct GatedSource: FolderSource {
+    let inner: LocalSource
+    let gate: DispatchSemaphore
+
+    var displayName: String { inner.displayName }
+    var volume: Volume { inner.volume }
+    func list(_ path: String, skipHidden: Bool) throws -> [DirectoryEntry] { try inner.list(path, skipHidden: skipHidden) }
+    func open(_ path: String) throws -> any ReadableFile {
+        gate.wait()
+        return try inner.open(path)
+    }
+    func linkDestination(_ path: String) throws -> String { try inner.linkDestination(path) }
+    func localURL(_ path: String) -> URL? { inner.localURL(path) }
+}
+
+struct ThreadTuningTests {
+    @Test func `uses half the performance cores, between 4 and 8, on local disks`() {
+        #expect(ThreadTuning.localThreads(performanceCores: 2) == 4)
+        #expect(ThreadTuning.localThreads(performanceCores: 8) == 4)
+        #expect(ThreadTuning.localThreads(performanceCores: 12) == 6)
+        #expect(ThreadTuning.localThreads(performanceCores: 16) == 8)
+        #expect(ThreadTuning.localThreads(performanceCores: 24) == 8)
+        let threads = ThreadTuning.threads(performanceCores: 12, isLocal: true, items: 0, maxVnodes: 1_000_000)
+        #expect(threads.folders == 6)
+        #expect(threads.contents == 6)
+    }
+
+    @Test func `uses 8 threads for a network disk however big the tree`() {
+        for items in [0, 10_000_000] {
+            let threads = ThreadTuning.threads(performanceCores: 4, isLocal: false, items: items, maxVnodes: 100)
+            #expect(threads.folders == 8)
+            #expect(threads.contents == 8)
+        }
+    }
+
+    @Test func `grows once a tree outgrows half the vnode cache`() {
+        #expect(ThreadTuning.bigTree(maxVnodes: 500_000) == 250_000)
+        #expect(ThreadTuning.bigTree(maxVnodes: 0) == 131_072)
+        let below = ThreadTuning.threads(performanceCores: 10, isLocal: true, items: 249_999, maxVnodes: 500_000)
+        #expect(below.folders == 5)
+        #expect(below.contents == 5)
+        let above = ThreadTuning.threads(performanceCores: 10, isLocal: true, items: 250_000, maxVnodes: 500_000)
+        #expect(above.folders == 16)
+        #expect(above.contents == 32)
+    }
+
+    @Test func `starts the engine with the tuned counts for this machine`() {
+        let local = Volume(fileSystem: "apfs", isLocal: true)
+        let share = Volume(fileSystem: "smbfs", isLocal: false)
+        let expected = ThreadTuning.localThreads(performanceCores: FolderEngine.performanceCores)
+        #expect(FolderEngine.folderThreads(left: local, right: local) == expected)
+        #expect(FolderEngine.contentThreads(left: local, right: local) == expected)
+        #expect(FolderEngine.folderThreads(left: local, right: share) == 8)
+        #expect(FolderEngine.contentThreads(left: share, right: local) == 8)
+        #expect(FolderEngine.performanceCores > 0)
+        #expect(FolderEngine.maxVnodes > 0)
+        #expect(FolderEngine.bigTree == FolderEngine.maxVnodes / 2)
+    }
+}
+
+struct LocalFileCacheTests {
+    private func sparseFile(size: Int64) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(path: "moire-nocache-\(UUID().uuidString).bin")
+        try Data().write(to: url)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(size))
+        try handle.close()
+        return url
+    }
+
+    @Test func `bypasses the file cache only for big files`() throws {
+        let folder = FileManager.default.temporaryDirectory
+        for (size, uncached) in [(Int64(4096), false), (LocalFile.uncachedFrom - 1, false), (LocalFile.uncachedFrom, true)] {
+            let url = try sparseFile(size: size)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let file = try #require(try LocalSource(folder).open(url.lastPathComponent) as? LocalFile)
+            #expect(file.size == size)
+            #expect(file.bypassesCache == uncached, "\(size) bytes")
+            #expect(try file.read(at: size - 4, count: 8) == Data(count: 4))
+        }
+    }
+}
+
+struct FolderTreeStorageTests {
+    @Test func `stays under 64 bytes per item`() {
+        var tree = FolderTree()
+        let folder = FolderTree.SideInfo(kind: .directory, size: 0, modified: 0, fileID: 0)
+        let folders = (0..<40).map { FolderTree.Child(name: String(format: "dir%05d", $0), left: folder, right: folder, status: .pending) }
+        _ = tree.appendChildren(folders, to: 0)
+        for parent in 1...40 {
+            let files = (0..<100).map { index in
+                let file = FolderTree.SideInfo(kind: .file, size: Int64(index), modified: 1, fileID: 0)
+                return FolderTree.Child(name: String(format: "f%03d.txt", index), left: file, right: file, status: .identical)
+            }
+            _ = tree.appendChildren(files, to: Int32(parent))
+        }
+        #expect(tree.count == 4041)
+        // 54 bytes of fixed fields plus 8 bytes of name is the 62 the README promises; a new
+        // field of 2 bytes or more per item breaks the limit.
+        #expect(Double(tree.storageBytes) / Double(tree.count) < 64)
     }
 }
 
