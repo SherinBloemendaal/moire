@@ -176,7 +176,8 @@ public final class FolderEngine: Sendable {
 
         pools.withLock { $0 = Pools(folders: folderPool, contents: contentPool) }
         defer { pools.withLock { $0 = nil } }
-        folderPool.submit([FolderJob(item: 0, path: "", onLeft: true, onRight: true, rules: rootRules)])
+        foldCase.withLock { $0 = !leftVolume.isCaseSensitive || !rightVolume.isCaseSensitive }
+        folderPool.submit([FolderJob(item: 0, leftPath: "", rightPath: "", onLeft: true, onRight: true, rules: rootRules)])
         folderPool.waitUntilIdle()
         // Every content job has been handed out once the listing is done.
         contentPool?.waitUntilIdle()
@@ -237,12 +238,19 @@ public final class FolderEngine: Sendable {
 
     // MARK: Reading folders
 
+    /// Names that differ only in case are one item when either side cannot tell them apart.
+    private let foldCase = Mutex(false)
+
     private struct FolderJob: Sendable {
         let item: Int32
-        /// The folder's path relative to the compared folders; empty for the root.
-        let path: String
+        /// The folder's path on each side, relative to the compared folders; empty for the root.
+        /// They differ only when the sides spell a folder name in another case.
+        let leftPath: String
+        let rightPath: String
         let onLeft: Bool
         let onRight: Bool
+        /// The path filters and `.gitignore` rules are matched against.
+        var path: String { onLeft ? leftPath : rightPath }
         /// Exclude masks plus the `.gitignore` rules of this folder and the folders above it.
         let rules: IgnoreRules
     }
@@ -266,8 +274,8 @@ public final class FolderEngine: Sendable {
         var leftEntries: [DirectoryEntry] = []
         var rightEntries: [DirectoryEntry] = []
         do {
-            if job.onLeft { leftEntries = try leftSource.list(job.path, skipHidden: settings.skipHidden) }
-            if job.onRight { rightEntries = try rightSource.list(job.path, skipHidden: settings.skipHidden) }
+            if job.onLeft { leftEntries = try leftSource.list(job.leftPath, skipHidden: settings.skipHidden) }
+            if job.onRight { rightEntries = try rightSource.list(job.rightPath, skipHidden: settings.skipHidden) }
         } catch {
             tree.withLock { tree in
                 tree.statuses[Int(job.item)] = .unreadable
@@ -278,9 +286,10 @@ public final class FolderEngine: Sendable {
 
         var rules = job.rules
         if settings.filter.useGitignore {
-            for (source, entries) in [(leftSource, leftEntries), (rightSource, rightEntries)] where entries.contains(where: { $0.name == ".gitignore" }) || settings.skipHidden {
+            for (source, folder, entries, present) in [(leftSource, job.leftPath, leftEntries, job.onLeft), (rightSource, job.rightPath, rightEntries, job.onRight)]
+            where present && (entries.contains(where: { $0.name == ".gitignore" }) || settings.skipHidden) {
                 // Hidden entries are not listed when skipped, so the file is opened directly then.
-                guard let file = try? source.open(Self.join(job.path, ".gitignore")), let data = try? file.readAll() else { continue }
+                guard let file = try? source.open(Self.join(folder, ".gitignore")), let data = try? file.readAll() else { continue }
                 rules.add(gitignore: String(decoding: data, as: UTF8.self), base: job.path)
             }
         }
@@ -318,14 +327,28 @@ public final class FolderEngine: Sendable {
         var contents: [ContentJob] = []
         for (offset, child) in children.enumerated() where child.status == .pending {
             let item = first + Int32(offset)
-            let path = Self.join(job.path, child.name)
+            let leftPath = Self.join(job.leftPath, child.name)
+            let rightPath = Self.join(job.rightPath, child.rightName ?? child.name)
             if child.left.kind == .file, child.right.kind == .file {
-                contents.append(ContentJob(item: item, path: path, leftInfo: child.left, rightInfo: child.right))
+                contents.append(ContentJob(item: item, leftPath: leftPath, rightPath: rightPath, leftInfo: child.left, rightInfo: child.right))
                 continue
             }
             let isFolder = (child.left.kind == .directory || !child.left.exists) && (child.right.kind == .directory || !child.right.exists)
             guard isFolder else { continue }
-            folders.append(FolderJob(item: item, path: path, onLeft: child.left.exists, onRight: child.right.exists, rules: rules))
+            folders.append(FolderJob(item: item, leftPath: leftPath, rightPath: rightPath, onLeft: child.left.exists, onRight: child.right.exists, rules: rules))
+        }
+        // A folder on one side and a file on the other: the folder's contents are listed too, so
+        // a sync that replaces the file with the folder knows what to copy into it.
+        for (offset, child) in children.enumerated() where child.left.kind != child.right.kind && child.left.exists && child.right.exists {
+            guard child.left.kind == .directory || child.right.kind == .directory else { continue }
+            folders.append(FolderJob(
+                item: first + Int32(offset),
+                leftPath: Self.join(job.leftPath, child.name),
+                rightPath: Self.join(job.rightPath, child.rightName ?? child.name),
+                onLeft: child.left.kind == .directory,
+                onRight: child.right.kind == .directory,
+                rules: rules
+            ))
         }
         if !contents.isEmpty {
             filesToRead.add(contents.count, ordering: .relaxed)
@@ -355,7 +378,8 @@ public final class FolderEngine: Sendable {
 
     private struct ContentJob: Sendable {
         let item: Int32
-        let path: String
+        let leftPath: String
+        let rightPath: String
         let leftInfo: FolderTree.SideInfo
         let rightInfo: FolderTree.SideInfo
 
@@ -391,8 +415,8 @@ public final class FolderEngine: Sendable {
         do {
             let (leftSource, rightSource) = currentSources()
             let verdict = try ContentComparer.compare(
-                leftSource.open(job.path, listedSize: job.leftInfo.size), rightSource.open(job.path, listedSize: job.rightInfo.size),
-                method: settings.method, options: diffOptions(for: job.path)
+                leftSource.open(job.leftPath, listedSize: job.leftInfo.size), rightSource.open(job.rightPath, listedSize: job.rightInfo.size),
+                method: settings.method, options: diffOptions(for: job.leftPath)
             )
             let remembered: ResultCache.Verdict = switch verdict {
             case .identical: .identical
@@ -430,10 +454,34 @@ public final class FolderEngine: Sendable {
 
         var children: [FolderTree.Child] = []
         children.reserveCapacity(max(leftEntries.count, rightEntries.count))
+        var unmatched: [DirectoryEntry] = []
         for entry in leftEntries {
-            let key = entry.name.precomposedStringWithCanonicalMapping
-            let match = rightByName.removeValue(forKey: key)
-            children.append(child(name: entry.name, left: entry, right: match, job: job))
+            if let match = rightByName.removeValue(forKey: entry.name.precomposedStringWithCanonicalMapping) {
+                children.append(child(name: entry.name, rightName: match.name == entry.name ? nil : match.name, left: entry, right: match, job: job))
+            } else {
+                unmatched.append(entry)
+            }
+        }
+
+        // On a case-insensitive volume `Readme.md` and `README.md` are one file: pairing them keeps a
+        // sync from writing one over the other while it thinks it creates a new file.
+        if foldCase.withLock({ $0 }), !unmatched.isEmpty, !rightByName.isEmpty {
+            var rightByFolded: [String: DirectoryEntry] = [:]
+            for (key, entry) in rightByName {
+                let folded = key.lowercased()
+                if rightByFolded[folded] == nil { rightByFolded[folded] = entry }
+            }
+            unmatched = unmatched.filter { entry in
+                let key = entry.name.precomposedStringWithCanonicalMapping.lowercased()
+                guard let match = rightByFolded.removeValue(forKey: key) else { return true }
+                rightByName[match.name.precomposedStringWithCanonicalMapping] = nil
+                children.append(child(name: entry.name, rightName: match.name, left: entry, right: match, job: job))
+                return false
+            }
+        }
+
+        for entry in unmatched {
+            children.append(child(name: entry.name, left: entry, right: nil, job: job))
         }
         for entry in rightEntries where rightByName[entry.name.precomposedStringWithCanonicalMapping] != nil {
             children.append(child(name: entry.name, left: nil, right: entry, job: job))
@@ -448,7 +496,7 @@ public final class FolderEngine: Sendable {
         return children
     }
 
-    private func child(name: String, left: DirectoryEntry?, right: DirectoryEntry?, job: FolderJob) -> FolderTree.Child {
+    private func child(name: String, rightName: String? = nil, left: DirectoryEntry?, right: DirectoryEntry?, job: FolderJob) -> FolderTree.Child {
         let leftInfo = left.map(Self.info) ?? .absent
         let rightInfo = right.map(Self.info) ?? .absent
         let status: FolderTree.Status
@@ -465,9 +513,9 @@ public final class FolderEngine: Sendable {
             status = .different
         case (.symbolicLink, .symbolicLink):
             let (leftSource, rightSource) = currentSources()
-            let path = Self.join(job.path, name)
             do {
-                status = try leftSource.linkDestination(path) == rightSource.linkDestination(path) ? .identical : .different
+                status = try leftSource.linkDestination(Self.join(job.leftPath, name))
+                    == rightSource.linkDestination(Self.join(job.rightPath, rightName ?? name)) ? .identical : .different
             } catch {
                 status = .unreadable
             }
@@ -478,7 +526,7 @@ public final class FolderEngine: Sendable {
             status = .identical
         }
 
-        return FolderTree.Child(name: name, left: leftInfo, right: rightInfo, status: status)
+        return FolderTree.Child(name: name, rightName: rightName, left: leftInfo, right: rightInfo, status: status)
     }
 
     private func fileStatus(_ left: FolderTree.SideInfo, _ right: FolderTree.SideInfo) -> FolderTree.Status {

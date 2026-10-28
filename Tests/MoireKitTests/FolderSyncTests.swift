@@ -47,10 +47,10 @@ struct FolderSyncTests {
         let plan = FolderSync.plan(try compare(left, right), mode: .update, direction: .leftToRight, settings: settings)
 
         #expect(Set(plan.actions) == [
-            .copy(path: "missing.txt", toRight: true, bytes: 1),
-            .copy(path: "newer.txt", toRight: true, bytes: 8),
+            .copy(from: "missing.txt", to: "missing.txt", toRight: true, bytes: 1),
+            .copy(from: "newer.txt", to: "newer.txt", toRight: true, bytes: 8),
             .createFolder(path: "deep", onRight: true),
-            .copy(path: "deep/a.txt", toRight: true, bytes: 1),
+            .copy(from: "deep/a.txt", to: "deep/a.txt", toRight: true, bytes: 1),
         ])
         #expect(FolderSync.execute(plan, left: left, right: right, trash: delete).isEmpty)
         #expect(try contents(right) == ["missing.txt": "m", "newer.txt": "left new", "older.txt": "right new", "deep/a.txt": "a", "extra.txt": "e"])
@@ -112,5 +112,63 @@ struct FolderSyncTests {
         #expect(try contents(right) == ["ok.txt": "ok"])
         // Nothing half-written is left next to the failed file.
         #expect(try FileManager.default.contentsOfDirectory(atPath: right.path(percentEncoded: false)) == ["ok.txt"])
+    }
+
+    @Test func `leaves a file alone that changed after the comparison`() throws {
+        let left = try tree(["a.txt": ("left new", new), "gone.txt": ("g", old)])
+        let right = try tree(["a.txt": ("right old", old), "extra.txt": ("e", old)])
+        let plan = FolderSync.plan(try compare(left, right), mode: .mirror, direction: .leftToRight, settings: settings)
+
+        // Edited and saved on the right after comparing: newer now, so it must survive.
+        try Data("right edited later".utf8).write(to: right.appending(path: "a.txt"))
+        try Data("also changed".utf8).write(to: right.appending(path: "extra.txt"))
+        let failures = FolderSync.execute(plan, left: left, right: right, trash: delete)
+
+        #expect(Set(failures.map(\.action.path)) == ["a.txt", "extra.txt"])
+        #expect(failures.allSatisfy { $0.message.contains("Changed since the comparison") })
+        #expect(try contents(right) == ["a.txt": "right edited later", "extra.txt": "also changed", "gone.txt": "g"])
+    }
+
+    @Test func `stops between actions when asked`() throws {
+        let left = try tree(["a.txt": ("a", old), "b.txt": ("b", old)])
+        let right = try tree([:])
+        let plan = FolderSync.plan(try compare(left, right), mode: .update, direction: .leftToRight, settings: settings)
+        #expect(FolderSync.execute(plan, left: left, right: right, isCancelled: { true }, trash: delete).isEmpty)
+        #expect(try contents(right).isEmpty)
+    }
+
+    @Test func `mirror replaces a file with a folder and fills it`() throws {
+        let left = try tree(["assets/a.png": ("a", old), "assets/sub/b.png": ("b", old)])
+        let right = try tree(["assets": ("i am a file", old)])
+        let plan = FolderSync.plan(try compare(left, right), mode: .mirror, direction: .leftToRight, settings: settings)
+        #expect(FolderSync.execute(plan, left: left, right: right, trash: delete).isEmpty)
+        #expect(try contents(right) == ["assets/a.png": "a", "assets/sub/b.png": "b"])
+    }
+
+    @Test func `mirror replaces a folder with a file`() throws {
+        let left = try tree(["thing": ("file now", old)])
+        let right = try tree(["thing/inside.txt": ("x", old)])
+        let plan = FolderSync.plan(try compare(left, right), mode: .mirror, direction: .leftToRight, settings: settings)
+        #expect(FolderSync.execute(plan, left: left, right: right, trash: delete).isEmpty)
+        #expect(try contents(right) == ["thing": "file now"])
+    }
+
+    @Test func `pairs names that differ only in case on a case-insensitive disk`() throws {
+        let left = try tree(["Readme.md": ("left text", new)])
+        let right = try tree(["README.md": ("right text", old)])
+        guard try !Volume.of(right.path(percentEncoded: false)).isCaseSensitive else { return }
+
+        let compared = try compare(left, right)
+        #expect(compared.count == 2)
+        #expect(compared.name(of: 1, on: .left) == "Readme.md")
+        #expect(compared.name(of: 1, on: .right) == "README.md")
+        #expect(compared.status(of: 1) == .different)
+
+        // Mirror used to copy "Readme.md" over "README.md" and then trash it: both versions gone.
+        let plan = FolderSync.plan(compared, mode: .mirror, direction: .leftToRight, settings: settings)
+        #expect(plan.actions == [.copy(from: "Readme.md", to: "README.md", toRight: true, bytes: 9)])
+        #expect(FolderSync.execute(plan, left: left, right: right, trash: delete).isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: right.path(percentEncoded: false)) == ["README.md"])
+        #expect(try contents(right) == ["README.md": "left text"])
     }
 }

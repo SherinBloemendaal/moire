@@ -193,7 +193,7 @@ func compareFiles(_ arguments: Arguments, left: URL, right: URL) throws -> Int32
 
 func describe(_ action: FolderSync.Action) -> String {
     switch action {
-    case let .copy(path, toRight, bytes): "copy \(toRight ? "→" : "←") \(path) (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))"
+    case let .copy(_, path, toRight, bytes): "copy \(toRight ? "→" : "←") \(path) (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))"
     case let .createFolder(path, onRight): "new folder on the \(onRight ? "right" : "left"): \(path)/"
     case let .trash(path, onRight): "to the Trash from the \(onRight ? "right" : "left"): \(path)"
     }

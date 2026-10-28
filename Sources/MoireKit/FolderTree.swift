@@ -67,6 +67,9 @@ public struct FolderTree: Sendable {
     var listed: [Bool] = [false]
     /// Only for the few items that need it: lines changed (line by line) and read errors.
     var changedLines: [Int32: Int] = [:]
+    /// The right side's name where it differs from `name(of:)` (only in case, on a
+    /// case-insensitive volume).
+    var rightNames: [Int32: String] = [:]
     var errors: [Int32: String] = [:]
 
     public init() {}
@@ -85,6 +88,23 @@ public struct FolderTree: Sendable {
     public func name(of item: Int) -> String {
         let start = Int(nameOffsets[item])
         return String(decoding: nameBytes[start..<(start + Int(nameLengths[item]))], as: UTF8.self)
+    }
+
+    /// The item's name on one side: they differ only when the sides spell it in another case.
+    public func name(of item: Int, on side: DiffSide) -> String {
+        side == .right ? rightNames[Int32(item)] ?? name(of: item) : name(of: item)
+    }
+
+    /// The path on one side, built from that side's own names. For an item missing on that
+    /// side, where it would go there.
+    public func path(of item: Int, on side: DiffSide) -> String {
+        var parts: [String] = []
+        var current = item
+        while current > 0 {
+            parts.append(name(of: current, on: side))
+            current = Int(parents[current])
+        }
+        return parts.reversed().joined(separator: "/")
     }
 
     /// The path relative to the compared folders, with `/` between parts. Empty for item 0.
@@ -163,6 +183,7 @@ public struct FolderTree: Sendable {
             let utf8 = child.name.utf8
             nameLengths.append(UInt16(clamping: utf8.count))
             nameBytes.append(contentsOf: utf8)
+            if let rightName = child.rightName { rightNames[Int32(parents.count - 1)] = rightName }
             leftKinds.append(child.left.kind)
             rightKinds.append(child.right.kind)
             leftSizes.append(child.left.size)
@@ -213,6 +234,8 @@ public struct FolderTree: Sendable {
 
     struct Child {
         var name: String
+        /// Set when the right side spells the name differently.
+        var rightName: String? = nil
         var left: SideInfo
         var right: SideInfo
         var status: Status

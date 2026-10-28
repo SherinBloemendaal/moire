@@ -117,12 +117,13 @@ struct FolderEngineMetadataTests {
         }
     }
 
-    @Test func `treats a file against a folder as a difference and does not descend`() throws {
+    @Test func `treats a file against a folder as a difference and lists the folder`() throws {
         let left = try makeTree(["thing": "file"])
         let right = try makeTree(["thing/inside.txt": "x"])
         let result = try compare(left, right)
-        #expect(statuses(result) == ["thing": .different])
-        #expect(result.differenceCount == 1)
+        // The folder's contents are listed, so a sync that replaces the file knows what to copy.
+        #expect(statuses(result) == ["thing": .different, "thing/inside.txt": .rightOnly])
+        #expect(result.differenceCount == 2)
     }
 
     @Test func `compares symbolic links by destination and never follows them`() throws {
