@@ -283,3 +283,45 @@ struct LineDiffRowTests {
         #expect(steps == 4)
     }
 }
+
+struct LineAnchorTests {
+    @Test func `aligns the anchored lines on one row`() {
+        let left = TextDocument("a\nb\nc\nd\n")
+        let right = TextDocument("x\nc\ny\nb\n")
+        let plain = LineDiff(left: left, right: right)
+        let anchored = LineDiff(left: left, right: right, anchors: [LineAnchor(left: 1, right: 3)])
+        #expect(plain.row(ofLine: 1, on: .left) != plain.row(ofLine: 3, on: .right))
+        #expect(anchored.row(ofLine: 1, on: .left) == anchored.row(ofLine: 3, on: .right))
+        #expect(anchored.rows[anchored.row(ofLine: 1, on: .left)].kind == .same)
+        #expect(Array(anchored.rows).compactMap(\.left) == [0, 1, 2, 3])
+        #expect(Array(anchored.rows).compactMap(\.right) == [0, 1, 2, 3])
+    }
+
+    @Test func `pairs anchored lines that differ as a change of their own`() {
+        let diff = LineDiff(left: TextDocument("a\nb\nc\n"), right: TextDocument("x\ny\nc\n"), anchors: [LineAnchor(left: 0, right: 1)])
+        let row = diff.rows[diff.row(ofLine: 0, on: .left)]
+        #expect(row.kind == .changed)
+        #expect(row.right == 1)
+        #expect(diff.hunks.contains(Hunk(left: 0..<1, right: 1..<2)))
+        #expect(Array(diff.rows).compactMap(\.right) == [0, 1, 2])
+    }
+
+    @Test func `keeps anchors in range, sorted and uncrossed`() {
+        let anchors = [LineAnchor(left: 5, right: 1), LineAnchor(left: 2, right: 3), LineAnchor(left: 9, right: 0), LineAnchor(left: 4, right: 4), LineAnchor(left: 50, right: 5)]
+        #expect(LineAnchor.normalized(anchors, leftCount: 10, rightCount: 10) == [LineAnchor(left: 2, right: 3), LineAnchor(left: 4, right: 4)])
+    }
+
+    @Test func `a new anchor replaces the ones it crosses or shares a line with`() {
+        let anchors = [LineAnchor(left: 1, right: 1), LineAnchor(left: 5, right: 5), LineAnchor(left: 8, right: 9)]
+        #expect(LineAnchor.adding(LineAnchor(left: 6, right: 2), to: anchors) == [LineAnchor(left: 1, right: 1), LineAnchor(left: 6, right: 2), LineAnchor(left: 8, right: 9)])
+        #expect(LineAnchor.adding(LineAnchor(left: 8, right: 3), to: anchors) == [LineAnchor(left: 1, right: 1), LineAnchor(left: 8, right: 3)])
+    }
+
+    @Test func `moves with edits and goes away when its line does`() {
+        let anchor = LineAnchor(left: 4, right: 6)
+        #expect(anchor.adjusted(for: LineEdit(side: .left, range: 0..<0, lines: ["new"])) == LineAnchor(left: 5, right: 6))
+        #expect(anchor.adjusted(for: LineEdit(side: .right, range: 6..<7, lines: ["typed"])) == anchor)
+        #expect(anchor.adjusted(for: LineEdit(side: .right, range: 5..<7, lines: [])) == nil)
+        #expect(anchor.adjusted(for: LineEdit(side: .left, range: 9..<12, lines: [])) == anchor)
+    }
+}

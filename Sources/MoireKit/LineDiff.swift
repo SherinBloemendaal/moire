@@ -88,10 +88,53 @@ public struct DiffStatistics: Sendable, Hashable {
     }
 }
 
+/// A line on the left and a line on the right that the user wants on one row. The comparison
+/// is worked out separately above, between and below anchors.
+public struct LineAnchor: Sendable, Hashable {
+    public var left: Int
+    public var right: Int
+
+    public init(left: Int, right: Int) {
+        self.left = left
+        self.right = right
+    }
+
+    public func line(on side: DiffSide) -> Int { side == .left ? left : right }
+
+    /// The anchors that can be used together: inside both documents, sorted, and never
+    /// crossing (an anchor lower on the left is also lower on the right).
+    public static func normalized(_ anchors: [LineAnchor], leftCount: Int, rightCount: Int) -> [LineAnchor] {
+        var result: [LineAnchor] = []
+        for anchor in anchors.sorted(by: { ($0.left, $0.right) < ($1.left, $1.right) })
+        where anchor.left >= 0 && anchor.left < leftCount && anchor.right >= 0 && anchor.right < rightCount {
+            if let last = result.last, anchor.left <= last.left || anchor.right <= last.right { continue }
+            result.append(anchor)
+        }
+        return result
+    }
+
+    /// `anchors` with `new` added. Anchors that share a line with it or cross it make way.
+    public static func adding(_ new: LineAnchor, to anchors: [LineAnchor]) -> [LineAnchor] {
+        var result = anchors.filter { anchor in
+            anchor.left != new.left && anchor.right != new.right && (anchor.left < new.left) == (anchor.right < new.right)
+        }
+        result.append(new)
+        return result.sorted { $0.left < $1.left }
+    }
+
+    /// Where the anchor ends up after `edit`. Nil when its line on the edited side was removed.
+    public func adjusted(for edit: LineEdit) -> LineAnchor? {
+        guard let line = edit.map(line: line(on: edit.side)) else { return nil }
+        return edit.side == .left ? LineAnchor(left: line, right: right) : LineAnchor(left: left, right: line)
+    }
+}
+
 public struct LineDiff: Sendable {
     public let left: TextDocument
     public let right: TextDocument
     public let options: DiffOptions
+    /// The anchors that were used, after `LineAnchor.normalized`.
+    public let anchors: [LineAnchor]
     public let hunks: [Hunk]
     /// For each hunk, the index of its first row in `rows`.
     public let hunkRows: [Int]
@@ -102,15 +145,31 @@ public struct LineDiff: Sendable {
     /// no memory. Changed rows come with their changed words marked.
     public var rows: Rows { Rows(diff: self) }
 
-    public init(left: TextDocument, right: TextDocument, options: DiffOptions = DiffOptions()) {
+    public init(left: TextDocument, right: TextDocument, options: DiffOptions = DiffOptions(), anchors: [LineAnchor] = []) {
         self.left = left
         self.right = right
         self.options = options
+        let anchors = LineAnchor.normalized(anchors, leftCount: left.lines.count, rightCount: right.lines.count)
+        self.anchors = anchors
 
         let (leftIDs, rightIDs) = LineInterner.ids(left.lines, right.lines, options: options)
         var builder = Builder()
         var marks = Myers.InternedMarks(idCount: leftIDs.count + rightIDs.count)
-        builder.add(Myers.diff(ids: leftIDs[...], rightIDs[...], marks: &marks))
+        var leftStart = 0
+        var rightStart = 0
+        for anchor in anchors + [LineAnchor(left: leftIDs.count, right: rightIDs.count)] {
+            let operations = Myers.diff(ids: leftIDs[leftStart..<anchor.left], rightIDs[rightStart..<anchor.right], marks: &marks)
+            builder.add(operations)
+            guard anchor.left < leftIDs.count else { break }
+            if leftIDs[anchor.left] == rightIDs[anchor.right] {
+                builder.add([.equal])
+            } else {
+                // On its own, so it is paired with the anchored line and nothing else.
+                builder.addHunk(deleted: 1, inserted: 1)
+            }
+            leftStart = anchor.left + 1
+            rightStart = anchor.right + 1
+        }
 
         hunks = builder.hunks
         hunkRows = builder.hunkRows
