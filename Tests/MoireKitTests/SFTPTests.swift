@@ -310,8 +310,9 @@ struct SFTPConnectionTests {
     }
 
     @Test func `many threads share one connection`() throws {
-        var files: [String: Data] = [:]
-        for index in 0..<40 { files["/d\(index % 5)/f\(index)"] = randomData(5_000 + index * 997, seed: UInt64(index)) }
+        let files = Dictionary(uniqueKeysWithValues: (0..<40).map { index in
+            ("/d\(index % 5)/f\(index)", randomData(5_000 + index * 997, seed: UInt64(index)))
+        })
         let (source, _) = try connect(files: files, maximumRead: 4096)
         let failures = Mutex<[String]>([])
         DispatchQueue.concurrentPerform(iterations: 40) { index in
