@@ -60,7 +60,7 @@ struct DifferenceStepper: View {
                 Button(action: next) { Image(systemName: "chevron.down") }
                     .help("Next difference (⌥⌘↓)")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.bar)
         }
     }
 }

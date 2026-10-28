@@ -754,14 +754,13 @@ private struct MergeStatusBar: View {
                     Button { model.goToNextConflict() } label: { Image(systemName: "chevron.down") }
                         .help("Next conflict (⌃⌘↓)")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bar)
             }
 
             Toggle(isOn: $model.onlyChanges) {
                 Image(systemName: "rectangle.compress.vertical")
             }
-            .toggleStyle(.button)
-            .buttonStyle(.borderless)
+            .toggleStyle(.bar)
             .help("Only show changes, with a few lines around them")
         }
         .font(.system(size: 12))

@@ -127,8 +127,7 @@ struct TableCompareView: View {
                               previous: model.goToPreviousDifference, next: model.goToNextDifference)
             settings
             Toggle(isOn: $model.onlyChanges) { Image(systemName: "rectangle.compress.vertical") }
-                .toggleStyle(.button)
-                .buttonStyle(.borderless)
+                .toggleStyle(.bar)
                 .help("Only show rows that changed")
         }
         .task(id: Reload(revision: files.revision, hasHeader: model.hasHeader, delimiter: model.delimiter, keys: model.keyNames, options: compare.options)) {

@@ -227,3 +227,57 @@ extension View {
         }
     }
 }
+
+/// A small icon or text button in a bar. A borderless button takes a click on its glyph only,
+/// which for a chevron is a few points; here the whole padded square does, and it lights up
+/// under the mouse so that area can be seen.
+struct BarButtonStyle: ButtonStyle {
+    var isOn = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        BarButton(configuration: configuration, isOn: isOn)
+    }
+
+    private struct BarButton: View {
+        let configuration: Configuration
+        let isOn: Bool
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var isHovered = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 5)
+            configuration.label
+                .foregroundStyle(isOn ? AnyShapeStyle(Theme.iris) : AnyShapeStyle(.foreground))
+                .padding(.horizontal, 4)
+                .frame(minWidth: 22, minHeight: 22)
+                .background(shape.fill(fill))
+                .contentShape(shape)
+                .opacity(isEnabled ? 1 : 0.4)
+                .onHover { isHovered = $0 }
+        }
+
+        private var fill: AnyShapeStyle {
+            if configuration.isPressed { return AnyShapeStyle(.primary.opacity(0.16)) }
+            if isOn { return AnyShapeStyle(Theme.iris.opacity(isHovered && isEnabled ? 0.22 : 0.15)) }
+            return AnyShapeStyle(.primary.opacity(isHovered && isEnabled ? 0.08 : 0))
+        }
+    }
+}
+
+/// An on and off switch shown as a bar button, colored while it is on.
+struct BarToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: { configuration.label }
+            .buttonStyle(BarButtonStyle(isOn: configuration.isOn))
+            .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
+            .accessibilityValue(configuration.isOn ? "On" : "Off")
+    }
+}
+
+extension ButtonStyle where Self == BarButtonStyle {
+    static var bar: BarButtonStyle { BarButtonStyle() }
+}
+
+extension ToggleStyle where Self == BarToggleStyle {
+    static var bar: BarToggleStyle { BarToggleStyle() }
+}

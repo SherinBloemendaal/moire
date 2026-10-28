@@ -90,7 +90,7 @@ struct ConnectSheet: View {
                             RecentServers.remove(location)
                             recents = RecentServers.load()
                         } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(.bar)
                             .foregroundStyle(.secondary)
                             .help("Remove from the list")
                     }

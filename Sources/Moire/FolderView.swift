@@ -26,6 +26,7 @@ struct FolderView: View {
                         .frame(width: 30, height: 30)
                         .background(Theme.brand, in: Circle())
                         .shadow(color: Theme.iris.opacity(0.45), radius: 8, y: 2)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("Swap the left and right folder")
@@ -147,7 +148,7 @@ struct FolderView: View {
             if model.isComparing {
                 ProgressLine(progress: model.progress, startedAt: model.startedAt)
                 Button("Stop", systemImage: "stop.fill") { model.stop() }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.bar)
                     .help("Stop comparing and keep what was found so far")
             } else if model.tree != nil, model.hasBothSides {
                 Chip(text: "\(model.count(.different)) different", color: Theme.changed)
@@ -180,17 +181,17 @@ struct FolderView: View {
             Button { showsFilters.toggle() } label: {
                 Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.bar)
             .popover(isPresented: $showsFilters, arrowEdge: .top) { FilterPopover(model: model) }
             .help("Include and exclude masks, .gitignore, hidden files")
 
             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bar)
                 .help("Compare again")
                 .disabled(!model.hasBothSides)
 
             Button { syncItems = Array(selection) } label: { Image(systemName: "arrow.triangle.2.circlepath") }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bar)
                 .help(model.hasBothSides && !model.canSync ? "Sync works between folders on this Mac only"
                     : !model.isComplete && model.tree != nil ? "Compare to the end first: a stopped comparison is not complete enough to sync"
                     : "Sync the folders, or the selected items")

@@ -23,8 +23,7 @@ struct FindBar: View {
             Toggle(isOn: $model.searchCaseSensitive) {
                 Text("Aa").font(.system(size: 11, weight: .semibold))
             }
-            .toggleStyle(.button)
-            .buttonStyle(.borderless)
+            .toggleStyle(.bar)
             .help(model.searchCaseSensitive ? "Upper and lower case must match" : "Upper and lower case are the same")
 
             Text(status)
@@ -39,11 +38,11 @@ struct FindBar: View {
                 Button { model.findNext() } label: { Image(systemName: "chevron.down") }
                     .help("Next match (⌘G)")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.bar)
             .disabled(model.searchMatchCount == 0)
 
             Button("Done") { model.hideSearch() }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bar)
         }
         .font(.system(size: 12))
         .controlSize(.small)

@@ -58,6 +58,7 @@ struct CompareView: View {
                     .frame(width: 30, height: 30)
                     .background(Theme.brand, in: Circle())
                     .shadow(color: Theme.iris.opacity(0.45), radius: 8, y: 2)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Swap the left and right side")
@@ -250,7 +251,7 @@ private struct StatusBar: View {
                     Button { model.goToNextChange() } label: { Image(systemName: "chevron.down") }
                         .help("Next change (⌥⌘↓)")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bar)
             }
 
             Menu {
@@ -271,8 +272,7 @@ private struct StatusBar: View {
             Toggle(isOn: $model.onlyChanges) {
                 Image(systemName: "rectangle.compress.vertical")
             }
-            .toggleStyle(.button)
-            .buttonStyle(.borderless)
+            .toggleStyle(.bar)
             .help("Only show changes, with a few lines around them")
 
             Picker("Layout", selection: $model.layout) {
@@ -423,6 +423,8 @@ struct GlowButtonStyle: ButtonStyle {
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
             .modifier(GlowSurface(isPressed: configuration.isPressed))
+            // The whole capsule takes a click, whatever surface it is drawn with.
+            .contentShape(Capsule())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)
     }
@@ -450,6 +452,7 @@ struct GlassButtonStyle: ButtonStyle {
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
             .glass(in: Capsule(), interactive: true)
+            .contentShape(Capsule())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)
     }
