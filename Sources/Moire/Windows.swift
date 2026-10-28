@@ -126,8 +126,9 @@ final class Windows {
         }
     }
 
-    func newTab() {
-        tabParent = NSApp.keyWindow
+    /// `parent` is the key window; tests, which have none, pass their own.
+    func newTab(beside parent: NSWindow? = NSApp.keyWindow) {
+        tabParent = parent
         opener?(WindowRequest(asTab: true))
     }
 

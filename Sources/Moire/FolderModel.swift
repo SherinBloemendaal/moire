@@ -392,15 +392,7 @@ final class FolderModel {
     /// Moves items to the Trash after asking, then compares again.
     func trash(_ items: [Int], side: SideID) {
         let urls = items.compactMap { url(of: $0, on: side) }
-        guard !urls.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = urls.count == 1
-            ? "Move \"\(urls[0].lastPathComponent)\" on the \(side.name.lowercased()) side to the Trash?"
-            : "Move \(urls.count) items on the \(side.name.lowercased()) side to the Trash?"
-        alert.informativeText = "You can put them back from the Trash."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard !urls.isEmpty, Self.confirmTrash(urls, side) else { return }
 
         var failures: [String] = []
         for url in urls {
@@ -416,19 +408,9 @@ final class FolderModel {
 
     /// Renames one item on one side, then compares again.
     func rename(_ item: Int, side: SideID) {
-        guard let url = url(of: item, on: side) else { return }
-        let alert = NSAlert()
-        alert.messageText = "Rename \"\(url.lastPathComponent)\""
-        alert.informativeText = "On the \(side.name.lowercased()) side."
-        let field = NSTextField(string: url.lastPathComponent)
-        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let url = url(of: item, on: side), let typed = Self.askNewName(url, side) else { return }
 
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let name = typed.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, name != url.lastPathComponent else { return }
         guard !name.contains("/") else {
             errorMessage = "A name cannot contain \"/\"."
@@ -448,6 +430,32 @@ final class FolderModel {
             errorMessage = error.localizedDescription
         }
         refresh()
+    }
+
+    /// Asks before moving to the Trash; replaced in tests, where an alert cannot be answered.
+    static var confirmTrash: ([URL], SideID) -> Bool = { urls, side in
+        let alert = NSAlert()
+        alert.messageText = urls.count == 1
+            ? "Move \"\(urls[0].lastPathComponent)\" on the \(side.name.lowercased()) side to the Trash?"
+            : "Move \(urls.count) items on the \(side.name.lowercased()) side to the Trash?"
+        alert.informativeText = "You can put them back from the Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Asks for the new name; nil is Cancel. Replaced in tests, where an alert cannot be answered.
+    static var askNewName: (URL, SideID) -> String? = { url, side in
+        let alert = NSAlert()
+        alert.messageText = "Rename \"\(url.lastPathComponent)\""
+        alert.informativeText = "On the \(side.name.lowercased()) side."
+        let field = NSTextField(string: url.lastPathComponent)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        return alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
     }
 
     // MARK: Sync
