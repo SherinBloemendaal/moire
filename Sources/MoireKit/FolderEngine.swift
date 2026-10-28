@@ -27,6 +27,9 @@ public struct FolderCompareSettings: Sendable, Hashable {
     public var diffOptions: DiffOptions
     /// Masks and `.gitignore` handling.
     public var filter: FolderFilter
+    /// For `.lines`: rules for differences that do not matter, by file extension (lowercased,
+    /// without the dot), with `"*"` for files without rules of their own.
+    public var textRules: [String: TextRules] = [:]
     /// Threads that read folders. `nil` picks a number for the disks involved.
     public var folderThreads: Int?
     /// Threads that read file contents. `nil` picks a number for the disks involved.
@@ -338,6 +341,17 @@ public final class FolderEngine: Sendable {
         var size: Int64 { leftInfo.size }
     }
 
+    /// The diff options for one file, with the rules for its kind.
+    private func diffOptions(for path: String) -> DiffOptions {
+        var options = settings.diffOptions
+        guard settings.method == .lines, !settings.textRules.isEmpty else { return options }
+        let name = (path as NSString).lastPathComponent
+        let ext = (name as NSString).pathExtension.lowercased()
+        options.rules = settings.textRules[ext] ?? settings.textRules["*"] ?? TextRules()
+        options.commentSyntax = CommentSyntax.forFile(named: name)
+        return options
+    }
+
     /// What a job reads from both files together, at most.
     private func bytesRead(for job: ContentJob) -> Int64 {
         let window = Int64(ContentComparer.quickWindow * 2)
@@ -357,7 +371,7 @@ public final class FolderEngine: Sendable {
             let (leftSource, rightSource) = currentSources()
             let verdict = try ContentComparer.compare(
                 leftSource.open(job.path, listedSize: job.leftInfo.size), rightSource.open(job.path, listedSize: job.rightInfo.size),
-                method: settings.method, options: settings.diffOptions
+                method: settings.method, options: diffOptions(for: job.path)
             )
             let remembered: ResultCache.Verdict = switch verdict {
             case .identical: .identical

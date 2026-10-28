@@ -18,6 +18,13 @@ struct MoireApp: App {
         .commands {
             MoireCommands()
         }
+
+        Settings {
+            TabView {
+                RulesSettingsView()
+                    .tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease") }
+            }
+        }
     }
 }
 

@@ -11,10 +11,16 @@ public struct DiffOptions: Sendable, Hashable {
 
     public var whitespace: Whitespace
     public var ignoreCase: Bool
+    /// Differences that do not matter: comments, patterns, blank lines.
+    public var rules: TextRules
+    /// The comment syntax for `rules.ignoreComments`, from the file name.
+    public var commentSyntax: CommentSyntax?
 
-    public init(whitespace: Whitespace = .exact, ignoreCase: Bool = false) {
+    public init(whitespace: Whitespace = .exact, ignoreCase: Bool = false, rules: TextRules = TextRules(), commentSyntax: CommentSyntax? = nil) {
         self.whitespace = whitespace
         self.ignoreCase = ignoreCase
+        self.rules = rules
+        self.commentSyntax = commentSyntax
     }
 
     /// One piece of text as these options compare it, for comparisons that work on strings
@@ -161,6 +167,9 @@ public struct LineDiff: Sendable {
     public let hunkRows: [Int]
     public let statistics: DiffStatistics
     public let rowCount: Int
+    /// Hunks made only of lines the rules say do not matter (comments, blank lines, ignored
+    /// patterns). They are shown, but not counted, and change navigation skips them.
+    public let ignoredHunks: Set<Int>
 
     /// Every row, worked out from the hunks when it is read, so millions of unchanged lines take
     /// no memory. Changed rows come with their changed words marked.
@@ -173,7 +182,29 @@ public struct LineDiff: Sendable {
         let anchors = LineAnchor.normalized(anchors, leftCount: left.lines.count, rightCount: right.lines.count)
         self.anchors = anchors
 
-        let (leftIDs, rightIDs) = LineInterner.ids(left.lines, right.lines, options: options)
+        let leftIDs: [Int]
+        let rightIDs: [Int]
+        var leftIgnorable: [Bool] = []
+        var rightIgnorable: [Bool] = []
+        if options.rules.isEmpty {
+            (leftIDs, rightIDs) = LineInterner.ids(left.lines, right.lines, options: options)
+        } else {
+            // Rules work on text, so lines go through strings here; without rules the byte
+            // interner above keeps huge files fast.
+            let leftLines = options.rules.apply(to: (0..<left.lines.count).map { left.lines[$0] }, language: options.commentSyntax)
+            let rightLines = options.rules.apply(to: (0..<right.lines.count).map { right.lines[$0] }, language: options.commentSyntax)
+            var ids: [String: Int] = [:]
+            func id(_ line: TextRules.Line) -> Int {
+                let key = options.key(for: line.text)
+                if let existing = ids[key] { return existing }
+                ids[key] = ids.count
+                return ids.count - 1
+            }
+            leftIDs = leftLines.map(id)
+            rightIDs = rightLines.map(id)
+            leftIgnorable = leftLines.map(\.ignorable)
+            rightIgnorable = rightLines.map(\.ignorable)
+        }
         var builder = Builder()
         var marks = Myers.InternedMarks(idCount: leftIDs.count + rightIDs.count)
         var leftStart = 0
@@ -194,8 +225,22 @@ public struct LineDiff: Sendable {
 
         hunks = builder.hunks
         hunkRows = builder.hunkRows
-        statistics = builder.statistics
         rowCount = builder.rowCount
+
+        var ignored: Set<Int> = []
+        var statistics = builder.statistics
+        if !leftIgnorable.isEmpty || !rightIgnorable.isEmpty {
+            for (index, hunk) in hunks.enumerated()
+            where hunk.left.allSatisfy({ leftIgnorable[$0] }) && hunk.right.allSatisfy({ rightIgnorable[$0] }) {
+                ignored.insert(index)
+                let paired = min(hunk.left.count, hunk.right.count)
+                statistics.changed -= paired
+                statistics.removed -= hunk.left.count - paired
+                statistics.added -= hunk.right.count - paired
+            }
+        }
+        ignoredHunks = ignored
+        self.statistics = statistics
     }
 
     private struct Builder {

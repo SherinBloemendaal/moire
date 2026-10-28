@@ -107,7 +107,7 @@ final class FolderModel {
     var isOnNetwork: Bool { leftVolume?.isLocal == false || rightVolume?.isLocal == false }
 
     var settings: FolderCompareSettings {
-        FolderCompareSettings(
+        var settings = FolderCompareSettings(
             method: method,
             skipHidden: skipHidden,
             filter: FolderFilter(
@@ -116,6 +116,8 @@ final class FolderModel {
                 useGitignore: useGitignore
             )
         )
+        settings.textRules = RulesStore.shared.rules
+        return settings
     }
 
     /// Files per status, worked out once per new tree.

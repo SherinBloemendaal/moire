@@ -35,8 +35,15 @@ extension DiffListController {
         }
     }
 
+    /// A row of a change the rules say does not matter: drawn without red, green or word marks.
+    private func isIgnored(_ row: DiffRow) -> Bool {
+        guard let hunk = row.hunk, let display else { return false }
+        return display.diff.ignoredHunks.contains(hunk)
+    }
+
     private func drawSideBySide(_ row: DiffRow, row index: Int, line: Int, in bounds: NSRect) {
-        let segments = segments(forRow: index, of: row)
+        let ignored = isIgnored(row)
+        let segments = ignored ? nil : segments(forRow: index, of: row)
         for side in SideID.allCases {
             var frame = sideFrame(side)
             frame.size.height = bounds.height
@@ -45,10 +52,10 @@ extension DiffListController {
                 continue
             }
             if row.kind != .same {
-                (side == .left ? Palette.removedRow : Palette.addedRow).setFill()
+                (ignored ? Palette.subtleFill : side == .left ? Palette.removedRow : Palette.addedRow).setFill()
                 frame.fill()
             }
-            let color = row.kind == .same ? Palette.gutterText : (side == .left ? Palette.removedNumber : Palette.addedNumber)
+            let color = row.kind == .same || ignored ? Palette.gutterText : (side == .left ? Palette.removedNumber : Palette.addedNumber)
             drawNumber(number, rightEdge: frame.minX + DiffMetrics.actionWidth + metrics.numberWidth, color: color)
             if alignmentMarks[side] == number { drawAlignmentMark(in: frame) }
             let text = NSRect(
@@ -85,7 +92,7 @@ extension DiffListController {
     /// `side` is nil for an unchanged row, which shows the left line with both numbers.
     private func drawUnified(_ row: DiffRow, row index: Int, side: SideID?, in bounds: NSRect) {
         if let side {
-            (side == .left ? Palette.removedRow : Palette.addedRow).setFill()
+            (isIgnored(row) ? Palette.subtleFill : side == .left ? Palette.removedRow : Palette.addedRow).setFill()
             bounds.fill()
         }
         if side != .right, let left = row.left {

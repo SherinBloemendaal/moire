@@ -22,7 +22,7 @@ struct ChangeMap: View {
                     if isCurrent {
                         context.fill(path, with: .linearGradient(Gradient(colors: [Theme.iris, Theme.cyan]), startPoint: frame.origin, endPoint: CGPoint(x: frame.maxX, y: frame.maxY)))
                     } else {
-                        context.fill(path, with: .color(color(for: diff.hunks[index])))
+                        context.fill(path, with: .color(diff.ignoredHunks.contains(index) ? Theme.gutterText.opacity(0.5) : color(for: diff.hunks[index])))
                     }
                 }
             }

@@ -48,10 +48,19 @@ public final class ResultCache: Sendable {
             right.standardizedFileURL.path(percentEncoded: false),
             settings.method.rawValue,
             settings.method == .lines ? "\(settings.diffOptions.whitespace.rawValue)-\(settings.diffOptions.ignoreCase)" : "",
+            settings.method == .lines ? rulesIdentity(settings.textRules) : "",
         ].joined(separator: "\n")
         let name = SHA256.hash(data: Data(identity.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appending(path: "io.github.sherinbloemendaal.moire/results/\(name).cache")
+    }
+
+    /// The rules as stable text: changing a rule must not reuse answers made under the old one.
+    private static func rulesIdentity(_ rules: [String: TextRules]) -> String {
+        guard !rules.isEmpty else { return "" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? String(decoding: encoder.encode(rules), as: UTF8.self)) ?? ""
     }
 
     public var count: Int { stored.count }

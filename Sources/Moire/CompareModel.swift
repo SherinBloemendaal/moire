@@ -473,9 +473,14 @@ final class CompareModel {
     func goToNextChange() { move(by: 1) }
     func goToPreviousChange() { move(by: -1) }
 
+    /// Steps to the next change that matters: hunks the rules ignore are skipped.
     private func move(by step: Int) {
-        guard hunkCount > 0 else { return }
-        let next = currentHunk.map { ($0 + step + hunkCount) % hunkCount } ?? (step > 0 ? 0 : hunkCount - 1)
+        guard let diff, hunkCount > 0 else { return }
+        var next = currentHunk.map { ($0 + step + hunkCount) % hunkCount } ?? (step > 0 ? 0 : hunkCount - 1)
+        for _ in 0..<hunkCount where diff.ignoredHunks.contains(next) {
+            next = (next + step + hunkCount) % hunkCount
+        }
+        guard !diff.ignoredHunks.contains(next) else { return }
         select(hunk: next)
     }
 
@@ -506,7 +511,17 @@ final class CompareModel {
         if diffRevisions == (left.revision, right.revision), diff.anchors == LineAnchor.normalized(anchors, leftCount: left.document.lines.count, rightCount: right.document.lines.count) {
             return diff
         }
-        return LineDiff(left: left.document, right: right.document, options: options, anchors: anchors)
+        return LineDiff(left: left.document, right: right.document, options: diffOptions, anchors: anchors)
+    }
+
+    /// `options` plus the rules for this kind of file (Settings > Rules), picked by the file
+    /// name of the right side, or the left when the right has none.
+    var diffOptions: DiffOptions {
+        var options = options
+        let name = right.url?.lastPathComponent ?? left.url?.lastPathComponent
+        options.rules = RulesStore.shared.rules(forFileNamed: name)
+        options.commentSyntax = name.flatMap(CommentSyntax.forFile(named:))
+        return options
     }
 
     /// Copies one line of a change: the left version of that row goes right, or the other way.
@@ -601,7 +616,21 @@ final class CompareModel {
         scheduleDiff(delay: isEditing || isTyping ? .milliseconds(150) : .zero)
     }
 
+    @ObservationIgnored private var rulesObserver: NSObjectProtocol?
+
+    /// Compares again when the rules in Settings change.
+    private func observeRules() {
+        guard rulesObserver == nil else { return }
+        rulesObserver = NotificationCenter.default.addObserver(forName: RulesStore.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isEmpty else { return }
+                self.scheduleDiff(delay: .zero)
+            }
+        }
+    }
+
     private func scheduleDiff(delay: Duration) {
+        observeRules()
         diffTask?.cancel()
         guard !hasBinarySide else {
             diff = nil
@@ -612,7 +641,7 @@ final class CompareModel {
         let leftDocument = left.document
         let rightDocument = right.document
         let revisions = (left.revision, right.revision)
-        let options = options
+        let options = diffOptions
         let anchors = anchors
         isComputing = true
         diffTask = Task {
