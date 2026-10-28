@@ -13,10 +13,29 @@ final class WorkPool<Job: Sendable>: @unchecked Sendable {
     private var isCancelled = false
     private var isClosed = false
     private let work: @Sendable (Job) -> Void
+    private let name: String
+    private var threadCount = 0
 
     init(threads: Int, name: String, work: @escaping @Sendable (Job) -> Void) {
         self.work = work
-        for index in 0..<max(1, threads) {
+        self.name = name
+        grow(to: threads)
+    }
+
+    var threads: Int {
+        condition.lock()
+        defer { condition.unlock() }
+        return threadCount
+    }
+
+    /// Adds threads until there are `count`. Never removes any.
+    func grow(to count: Int) {
+        condition.lock()
+        let start = threadCount
+        let target = max(start, max(1, count))
+        threadCount = target
+        condition.unlock()
+        for index in start..<target {
             let thread = Thread { [self] in loop() }
             thread.name = "\(name) \(index + 1)"
             thread.qualityOfService = .userInitiated

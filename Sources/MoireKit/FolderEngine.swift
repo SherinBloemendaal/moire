@@ -207,6 +207,24 @@ public final class FolderEngine: Sendable {
         left.isLocal && right.isLocal ? localThreads : 8
     }
 
+    /// Items (per side, roughly) from which a tree no longer fits in the kernel's vnode cache.
+    /// From there on files are opened from disk rather than from memory, and many requests in
+    /// flight keep the SSD busy: measured on an M2 Max with 1,000,000 files, byte for byte took
+    /// 144 s with 4 content threads, 84 s with 16 and 69 s with 32.
+    static let bigTree: Int = {
+        var vnodes: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.maxvnodes", &vnodes, &size, nil, 0) == 0, vnodes > 0 else { return 131_072 }
+        return Int(vnodes) / 2
+    }()
+
+    private func growForBigTree() {
+        guard let current = pools.withLock({ $0 }), sources.withLock({ $0 })?.left.volume.isLocal == true,
+              sources.withLock({ $0 })?.right.volume.isLocal == true else { return }
+        current.folders.grow(to: 16)
+        if settings.contentThreads == nil { current.contents?.grow(to: 32) }
+    }
+
     /// Half the performance cores, at least 4 and at most 8.
     static let localThreads: Int = {
         var cores: Int32 = 0
@@ -291,7 +309,10 @@ public final class FolderEngine: Sendable {
             return first
         }
         foldersListed.add(1, ordering: .relaxed)
-        itemsFound.add(children.count, ordering: .relaxed)
+        let found = itemsFound.add(children.count, ordering: .relaxed).newValue
+        if found >= Self.bigTree, found - children.count < Self.bigTree, settings.folderThreads == nil {
+            growForBigTree()
+        }
 
         var folders: [FolderJob] = []
         var contents: [ContentJob] = []

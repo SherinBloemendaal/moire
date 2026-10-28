@@ -1,0 +1,58 @@
+{
+  "cores" : 12,
+  "date" : "2026-10-28T02:08:59Z",
+  "machine" : "Apple M2 Max",
+  "memoryGB" : 64,
+  "scenarios" : {
+    "engine.binary.cached\/tree-1000000" : {
+      "bytes" : 4642042411,
+      "files" : 1000000,
+      "filesPerSecond" : 175514.58737935591,
+      "megabytesPerSecond" : 777.0024856225352,
+      "runs" : [
+        5.697532125
+      ],
+      "seconds" : 5.697532125
+    },
+    "engine.binary\/tree-1000000" : {
+      "bytes" : 4642042411,
+      "files" : 1000000,
+      "filesPerSecond" : 15424.473846502897,
+      "megabytesPerSecond" : 68.28409363062549,
+      "runs" : [
+        64.832033167
+      ],
+      "seconds" : 64.832033167
+    },
+    "engine.lines\/tree-1000000" : {
+      "bytes" : 4642042411,
+      "files" : 1000000,
+      "filesPerSecond" : 15191.809767563665,
+      "megabytesPerSecond" : 67.25409053885897,
+      "runs" : [
+        65.824942209
+      ],
+      "seconds" : 65.824942209
+    },
+    "engine.metadata\/tree-1000000" : {
+      "bytes" : 4642042411,
+      "files" : 1000000,
+      "filesPerSecond" : 173376.50473722024,
+      "megabytesPerSecond" : 767.5372009860218,
+      "runs" : [
+        5.767794209
+      ],
+      "seconds" : 5.767794209
+    },
+    "engine.quick\/tree-1000000" : {
+      "bytes" : 4642042411,
+      "files" : 1000000,
+      "filesPerSecond" : 15288.283722831171,
+      "megabytesPerSecond" : 67.68118041303946,
+      "runs" : [
+        65.409565791
+      ],
+      "seconds" : 65.409565791
+    }
+  }
+}
