@@ -359,10 +359,10 @@ struct MoireCommands: Commands {
             Divider()
             Button("Copy Change to Right") { compare.copyCurrentChange(toRight: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .disabled(!isText || isSpecial || compare.currentHunk == nil)
+                .disabled(!compare.canEdit(.right) || !isText || isSpecial || compare.currentHunk == nil)
             Button("Copy Change to Left") { compare.copyCurrentChange(toRight: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .disabled(!isText || isSpecial || compare.currentHunk == nil)
+                .disabled(!compare.canEdit(.left) || !isText || isSpecial || compare.currentHunk == nil)
             Divider()
             Button("Align Marked Lines") { compare.alignMarkedLines() }
                 .disabled(!isText || !compare.canAlign)
