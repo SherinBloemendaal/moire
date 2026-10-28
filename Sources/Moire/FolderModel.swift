@@ -204,15 +204,36 @@ final class FolderModel {
         return location.remoteVolume
     }
 
+    /// FTP passwords typed in Connect to Server, kept here until a comparison logs in with them.
+    /// Only then do they go to the Keychain, so a typo never replaces a password that worked.
+    private var untriedPasswords: [RemoteLocation: String] = [:]
+
+    func set(_ location: RemoteLocation, on side: SideID, password: String?) {
+        if let password { untriedPasswords[location] = password }
+        set(location, on: side)
+    }
+
     /// Makes the source for one side when the comparison starts, off the main thread. The FTP
-    /// password is read from the Keychain here, on the main thread, before that.
-    private static func sourceMaker(_ location: FolderLocation) -> @Sendable () throws -> any FolderSource {
+    /// password is looked up here, on the main thread, before that.
+    private func sourceMaker(_ location: FolderLocation) -> @Sendable () throws -> any FolderSource {
         switch location {
         case .local(let url):
             return { try LocalSource(url) }
         case .remote(let remote):
-            let password = remote.scheme.isFTP ? ServerKeychain.password(for: remote) : nil
+            let password = remote.scheme.isFTP ? untriedPasswords[remote] ?? ServerKeychain.password(for: remote) : nil
             return { try remote.makeSource(password: password) }
+        }
+    }
+
+    /// A comparison got through: the passwords it used have worked, so they are kept.
+    private func keepPasswordsThatWorked() {
+        for location in [leftLocation, rightLocation].compactMap({ $0?.remote }) {
+            guard let password = untriedPasswords.removeValue(forKey: location) else { continue }
+            do {
+                try ServerKeychain.save(password, for: location)
+            } catch {
+                errorMessage = "The password worked, but could not be saved in the Keychain: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -239,8 +260,8 @@ final class FolderModel {
         } else {
             nil
         }
-        let makeLeft = Self.sourceMaker(leftLocation)
-        let makeRight = Self.sourceMaker(rightLocation)
+        let makeLeft = sourceMaker(leftLocation)
+        let makeRight = sourceMaker(rightLocation)
         let engine = FolderEngine(sources: { (try makeLeft(), try makeRight()) }, settings: settings, cache: cache)
         self.engine = engine
         isComparing = true
@@ -284,6 +305,7 @@ final class FolderModel {
             switch result {
             case .success(let tree):
                 self.isComplete = true
+                self.keepPasswordsThatWorked()
                 self.show(tree)
             case .failure(is CancellationError):
                 // Stopped: keep what was found so far.
@@ -331,7 +353,7 @@ final class FolderModel {
                         NSLocalizedDescriptionKey: "\(tree.name(of: item)) is \(ByteCountFormatter.string(fromByteCount: info.size, countStyle: .file)); files over 1 GB on a server are not downloaded for the text comparison.",
                     ])
                 }
-                let makeSource = Self.sourceMaker(.remote(remote))
+                let makeSource = sourceMaker(.remote(remote))
                 let folder = Self.downloads.appending(path: UUID().uuidString, directoryHint: .isDirectory)
                 // A name from a server is used for one file in a folder of its own, never as a path:
                 // a hostile listing with "../" in a name must not write anywhere else.

@@ -146,12 +146,11 @@ struct ConnectSheet: View {
                     profile: profile.trimmingCharacters(in: .whitespaces)
                 )
             }
-            // A password in the address or the field goes to the Keychain; the address is kept without it.
-            if location.scheme.isFTP, let secret = typed ?? (password.isEmpty ? nil : password) {
-                try ServerKeychain.save(secret, for: location)
-            }
+            // A password in the address or the field goes to the Keychain once a comparison logs in
+            // with it; the address is kept without it.
+            let secret = location.scheme.isFTP ? typed ?? (password.isEmpty ? nil : password) : nil
             RecentServers.add(location)
-            model.set(location, on: side)
+            model.set(location, on: side, password: secret)
             dismiss()
         } catch {
             problem = error.localizedDescription
