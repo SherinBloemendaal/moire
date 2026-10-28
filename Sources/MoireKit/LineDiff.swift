@@ -256,9 +256,40 @@ public struct LineDiff: Sendable {
         return LineEdit(side: .left, range: hunk.left, lines: Lines(pieces: right.lines.pieces(in: hunk.right)))
     }
 
+    /// The edit that makes one row of a hunk the same on the receiving side: a changed line is
+    /// replaced, a line the other side lacks is inserted after that side's lines of the hunk, and
+    /// a line only the receiving side has is removed. Nil for an unchanged row.
+    public func edit(copyingRow index: Int, toRight: Bool) -> LineEdit? {
+        let row = row(at: index, withSegments: false)
+        guard let hunkIndex = row.hunk else { return nil }
+        let hunk = hunks[hunkIndex]
+        let source: DiffSide = toRight ? .left : .right
+        let target = source.other
+        let sourceDocument = toRight ? left : right
+        let targetHunk = range(of: hunk, on: target)
+        switch (row.line(on: source), row.line(on: target)) {
+        case (let from?, let to?):
+            return LineEdit(side: target, range: to..<(to + 1), lines: Lines(pieces: sourceDocument.lines.pieces(in: from..<(from + 1))))
+        case (let from?, nil):
+            let at = targetHunk.upperBound
+            return LineEdit(side: target, range: at..<at, lines: Lines(pieces: sourceDocument.lines.pieces(in: from..<(from + 1))))
+        case (nil, let to?):
+            return LineEdit(side: target, range: to..<(to + 1), lines: [])
+        case (nil, nil):
+            return nil
+        }
+    }
+
     /// The document on the receiving side with one hunk copied over from the other side.
     public func copying(hunk index: Int, toRight: Bool) -> TextDocument {
         (toRight ? right : left).applying(edit(copyingHunk: index, toRight: toRight))
+    }
+
+    /// The document on the receiving side with one row copied over from the other side.
+    public func copying(row index: Int, toRight: Bool) -> TextDocument {
+        let target = toRight ? right : left
+        guard let edit = edit(copyingRow: index, toRight: toRight) else { return target }
+        return target.applying(edit)
     }
 }
 

@@ -254,4 +254,32 @@ struct LineDiffRowTests {
             }
         }
     }
+
+    @Test func `copies a single changed, removed or added line`() {
+        let diff = LineDiff(left: TextDocument("a\nold 1\nold 2\nold 3\nz\n"), right: TextDocument("a\nnew 1\nz\nonly right\n"))
+        #expect(diff.rows.map(\.kind) == [.same, .changed, .removed, .removed, .same, .added])
+        // A changed line replaces its partner.
+        #expect(diff.copying(row: 1, toRight: true).text == "a\nold 1\nz\nonly right\n")
+        #expect(diff.copying(row: 1, toRight: false).text == "a\nnew 1\nold 2\nold 3\nz\n")
+        // A removed line is inserted after the other side's lines of the hunk, or removed.
+        #expect(diff.copying(row: 3, toRight: true).text == "a\nnew 1\nold 3\nz\nonly right\n")
+        #expect(diff.copying(row: 2, toRight: false).text == "a\nold 1\nold 3\nz\n")
+        // An added line is removed, or inserted on the left.
+        #expect(diff.copying(row: 5, toRight: true).text == "a\nnew 1\nz\n")
+        #expect(diff.copying(row: 5, toRight: false).text == "a\nold 1\nold 2\nold 3\nz\nonly right\n")
+        #expect(diff.edit(copyingRow: 0, toRight: true) == nil)
+    }
+
+    @Test func `copying the lines of a hunk one by one ends where copying the hunk does`() {
+        let left = TextDocument("keep\nl1\nl2\nl3\nl4\nend\n")
+        var right = TextDocument("keep\nr1\nr2\nend\n")
+        let whole = LineDiff(left: left, right: right).copying(hunk: 0, toRight: true)
+        var steps = 0
+        while let first = LineDiff(left: left, right: right).hunkRows.first, steps < 10 {
+            right = LineDiff(left: left, right: right).copying(row: first, toRight: true)
+            steps += 1
+        }
+        #expect(right == whole)
+        #expect(steps == 4)
+    }
 }
