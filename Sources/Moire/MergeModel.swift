@@ -210,8 +210,7 @@ final class MergeModel {
         guard let destination else { return false }
 
         do {
-            let text = merge.result(resolutions, labels: labels).text
-            try self[.left].encoding.encode(text).write(to: destination, options: .atomic)
+            try FileWriter.write(self[.left].encoding.encode(merge.result(resolutions, labels: labels)), to: destination)
             output = destination
             isDirty = false
             savedResolved = unresolved == 0

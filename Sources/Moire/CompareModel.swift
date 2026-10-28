@@ -394,7 +394,7 @@ final class CompareModel {
         guard let destination else { return false }
 
         do {
-            try current.encoding.encode(current.document).write(to: destination, options: .atomic)
+            try FileWriter.write(current.encoding.encode(current.document), to: destination)
             current.url = destination
             current.isDirty = false
             self[side] = current
