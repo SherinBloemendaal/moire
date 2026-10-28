@@ -4,10 +4,17 @@ import SwiftUI
 extension Color {
     /// A color that follows the window's light or dark appearance.
     static func dynamic(light: UInt32, dark: UInt32, lightAlpha: Double = 1, darkAlpha: Double = 1) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        Color(nsColor: .dynamic(light: light, dark: dark, lightAlpha: lightAlpha, darkAlpha: darkAlpha))
+    }
+}
+
+extension NSColor {
+    /// A color that follows the appearance it is drawn in.
+    static func dynamic(light: UInt32, dark: UInt32, lightAlpha: Double = 1, darkAlpha: Double = 1) -> NSColor {
+        NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             return NSColor(hex: isDark ? dark : light, alpha: isDark ? darkAlpha : lightAlpha)
-        })
+        }
     }
 }
 
@@ -46,6 +53,28 @@ enum Theme {
     static let changed = Color.dynamic(light: 0xD97706, dark: 0xFBBF24)
 
     static func code(size: Double) -> Font { .system(size: size, design: .monospaced) }
+}
+
+/// The same palette for the AppKit diff list, which draws its rows itself.
+enum Palette {
+    static let iris = NSColor(hex: 0x7C5CFF)
+    static let cyan = NSColor(hex: 0x22D3EE)
+    static let pane = NSColor.dynamic(light: 0xFFFFFF, dark: 0x12131D)
+    static let paneBorder = NSColor.dynamic(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.08, darkAlpha: 0.08)
+    static let gutterText = NSColor.dynamic(light: 0x9A9AB0, dark: 0x5E6078)
+    static let text = NSColor.dynamic(light: 0x1B1C2A, dark: 0xE4E5F1)
+    static let subtleFill = NSColor.dynamic(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.035, darkAlpha: 0.04)
+    static let shadow = NSColor.dynamic(light: 0x000000, dark: 0x000000, lightAlpha: 0.15, darkAlpha: 0.5)
+
+    static let added = NSColor.dynamic(light: 0x059669, dark: 0x34D399)
+    static let addedRow = NSColor.dynamic(light: 0x10B981, dark: 0x10B981, lightAlpha: 0.10, darkAlpha: 0.12)
+    static let addedWord = NSColor.dynamic(light: 0x10B981, dark: 0x10B981, lightAlpha: 0.30, darkAlpha: 0.36)
+    static let removed = NSColor.dynamic(light: 0xE11D48, dark: 0xFB7185)
+    static let removedRow = NSColor.dynamic(light: 0xF43F5E, dark: 0xF43F5E, lightAlpha: 0.09, darkAlpha: 0.12)
+    static let removedWord = NSColor.dynamic(light: 0xF43F5E, dark: 0xF43F5E, lightAlpha: 0.26, darkAlpha: 0.36)
+    static let addedNumber = NSColor.dynamic(light: 0x059669, dark: 0x34D399, lightAlpha: 0.8, darkAlpha: 0.8)
+    static let removedNumber = NSColor.dynamic(light: 0xE11D48, dark: 0xFB7185, lightAlpha: 0.8, darkAlpha: 0.8)
+    static let changed = NSColor.dynamic(light: 0xD97706, dark: 0xFBBF24)
 }
 
 /// Two sets of rings drifting over each other: the moiré that gives the app its name.

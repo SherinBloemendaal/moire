@@ -136,6 +136,28 @@ public struct Lines: Sendable {
         return result
     }
 
+    /// The widest line in columns, counting a tab as `tabWidth` and every UTF-8 byte as one
+    /// column, so the result is never narrower than the text. Read on every core.
+    public func widestLine(tabWidth: Int) -> Int {
+        let total = count
+        guard total > 0 else { return 0 }
+        let chunks = Swift.max(1, Swift.min(Parallel.coreCount * 4, total / 16_384))
+        var widths = [Int](repeating: 0, count: chunks)
+        let size = (total + chunks - 1) / chunks
+        widths.withUnsafeMutableBufferPointer { widths in
+            Parallel.forEach(chunks) { chunk in
+                var widest = 0
+                forEachLine(in: (chunk * size)..<Swift.min(total, (chunk + 1) * size)) { _, bytes in
+                    // Only a line that could be wider with its tabs is worth counting them in.
+                    guard bytes.count * tabWidth > widest else { return }
+                    widest = Swift.max(widest, bytes.count + bytes.count { $0 == 0x09 } * (tabWidth - 1))
+                }
+                widths[chunk] = widest
+            }
+        }
+        return widths.max() ?? 0
+    }
+
     /// The first line where `self` and `other` differ, or nil when they are the same. Lines
     /// both share from one buffer are skipped without reading them.
     public func firstDifference(from other: Lines) -> Int? {

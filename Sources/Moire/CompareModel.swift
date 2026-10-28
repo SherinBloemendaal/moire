@@ -4,28 +4,40 @@ import SwiftUI
 
 /// One side of a comparison: pasted or typed text, or a file.
 struct Side {
-    enum Content: Equatable {
-        case text(String)
+    enum Content {
+        case text(TextDocument)
         /// A file that is not text. Only its bytes can be compared.
         case binary(Data)
     }
 
-    var content: Content = .text("")
+    var content: Content = .text(TextDocument("")) {
+        didSet { revision &+= 1 }
+    }
     var url: URL?
     var encoding: TextEncoding = .utf8
     var isDirty = false
+    /// Counts every change of `content`, so a change is noticed without comparing the text.
+    private(set) var revision = 0
 
-    var text: String {
-        if case .text(let text) = content { return text }
-        return ""
+    init(content: Content = .text(TextDocument("")), url: URL? = nil) {
+        self.content = content
+        self.url = url
     }
+
+    var document: TextDocument {
+        if case .text(let document) = content { return document }
+        return TextDocument("")
+    }
+
+    /// The whole text as one string, for the plain text editor.
+    var text: String { document.text }
 
     var isBinary: Bool {
         if case .binary = content { return true }
         return false
     }
 
-    var isEmpty: Bool { url == nil && text.isEmpty && !isBinary }
+    var isEmpty: Bool { url == nil && !isBinary && document.lines.isEmpty }
 
     var title: String { url?.lastPathComponent ?? "Untitled" }
 
@@ -33,8 +45,9 @@ struct Side {
         if case .binary(let data) = content {
             return "Binary · " + ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
         }
-        let document = TextDocument(text)
-        let lines = document.lines.count == 1 ? "1 line" : "\(document.lines.count) lines"
+        let document = document
+        let count = document.lines.count
+        let lines = count == 1 ? "1 line" : "\(count.formatted()) lines"
         let ending = switch document.lineEnding {
         case .lf: "LF"
         case .crlf: "CRLF"
@@ -45,35 +58,23 @@ struct Side {
     }
 }
 
-enum SideID: CaseIterable {
-    case left, right
+typealias SideID = DiffSide
 
+extension DiffSide {
     var name: String { self == .left ? "Left" : "Right" }
 }
 
-/// What the diff list shows: unchanged lines, a block of changed lines, or a run of unchanged
-/// lines folded away.
-enum DisplayItem: Identifiable, Hashable {
-    case same(row: Int)
-    case hunk(index: Int, rows: Range<Int>)
-    case fold(rows: Range<Int>)
-
-    var id: Int {
-        switch self {
-        case .same(let row): row
-        case .hunk(_, let rows): rows.lowerBound
-        // Negative, so a fold never collides with a row it replaces.
-        case .fold(let rows): -rows.lowerBound - 1
-        }
-    }
+/// Asks the diff list to scroll to a row. Every request has a new id, so asking for the same
+/// row twice scrolls twice.
+struct ScrollRequest: Equatable {
+    var id: Int
+    var row: Int
+    var side: SideID?
 }
 
 @Observable
 final class CompareModel {
-    enum Layout: String, CaseIterable {
-        case sideBySide
-        case unified
-    }
+    typealias Layout = DiffDisplay.Layout
 
     var left = Side() { didSet { sidesChanged(oldValue: oldValue, newValue: left) } }
     var right = Side() { didSet { sidesChanged(oldValue: oldValue, newValue: right) } }
@@ -90,7 +91,10 @@ final class CompareModel {
     }
 
     var layout = Layout(rawValue: UserDefaults.standard.string(forKey: "layout") ?? "") ?? .sideBySide {
-        didSet { UserDefaults.standard.set(layout.rawValue, forKey: "layout") }
+        didSet {
+            UserDefaults.standard.set(layout.rawValue, forKey: "layout")
+            rebuildDisplay()
+        }
     }
 
     var onlyChanges = UserDefaults.standard.bool(forKey: "onlyChanges") {
@@ -107,15 +111,18 @@ final class CompareModel {
 
     var isEditing = false
     private(set) var diff: LineDiff?
-    private(set) var displayItems: [DisplayItem] = []
+    private(set) var display: DiffDisplay?
+    /// Goes up whenever `display` is rebuilt, so the list knows to reload.
+    private(set) var displayGeneration = 0
     private(set) var isComputing = false
+    private(set) var isLoading = false
     var currentHunk: Int?
-    /// Set to ask the diff list to scroll; the list clears it once it has scrolled.
-    var scrollRequest: Int?
+    private(set) var scrollRequest: ScrollRequest?
     var errorMessage: String?
 
     private var expandedFolds: Set<Int> = []
     private var diffTask: Task<Void, Never>?
+    private var loadTasks: [SideID: Task<Void, Never>] = [:]
 
     var isEmpty: Bool { left.isEmpty && right.isEmpty }
     var hasUnsavedChanges: Bool { left.isDirty || right.isDirty }
@@ -151,22 +158,23 @@ final class CompareModel {
         }
     }
 
+    /// Reads the file off the main thread; a big file then does not stall the window.
     func load(_ url: URL, into side: SideID) {
         guard canReplace(side) else { return }
-        do {
-            let file = try FileContent.read(url)
-            var new = Side(url: url)
-            switch file.body {
-            case .text(let document, let encoding):
-                new.content = .text(document.text)
-                new.encoding = encoding
-            case .binary(let data):
-                new.content = .binary(data)
+        loadTasks[side]?.cancel()
+        isLoading = true
+        loadTasks[side] = Task {
+            let result = await Task.detached(priority: .userInitiated) { Result { try FileContent.read(url) } }.value
+            guard !Task.isCancelled else { return }
+            loadTasks[side] = nil
+            isLoading = !loadTasks.isEmpty
+            switch result {
+            case .success(let file):
+                self[side] = Side(file: file)
+                if hasBinarySide { isEditing = false }
+            case .failure(let error):
+                errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
             }
-            self[side] = new
-            if hasBinarySide { isEditing = false }
-        } catch {
-            errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
         }
     }
 
@@ -178,15 +186,21 @@ final class CompareModel {
 
     var hasFiles: Bool { left.url != nil || right.url != nil }
 
+    /// Replaces the whole text of a side, from the plain text editor.
     func setText(_ text: String, on side: SideID) {
-        guard !self[side].isBinary, self[side].text != text else { return }
-        self[side].content = .text(text)
+        guard !self[side].isBinary else { return }
+        setDocument(TextDocument(text), on: side)
+    }
+
+    private func setDocument(_ document: TextDocument, on side: SideID) {
+        guard !self[side].isBinary else { return }
+        self[side].content = .text(document)
         self[side].isDirty = self[side].url != nil
     }
 
     func pasteClipboard(into side: SideID) {
         guard canReplace(side), let text = NSPasteboard.general.string(forType: .string) else { return }
-        self[side] = Side(content: .text(text))
+        self[side] = Side(content: .text(TextDocument(text)))
     }
 
     func clear(_ side: SideID) {
@@ -251,7 +265,7 @@ final class CompareModel {
         guard let destination else { return false }
 
         do {
-            try current.encoding.encode(current.text).write(to: destination, options: .atomic)
+            try current.encoding.encode(current.document).write(to: destination, options: .atomic)
             current.url = destination
             current.isDirty = false
             self[side] = current
@@ -278,15 +292,20 @@ final class CompareModel {
     func select(hunk index: Int) {
         guard let diff, diff.hunks.indices.contains(index) else { return }
         currentHunk = index
-        reveal(row: diff.hunkRows[index])
-        scrollRequest = diff.hunkRows[index]
+        scroll(toRow: diff.hunkRows[index])
+    }
+
+    /// Unfolds what hides the row and asks the list to scroll to it.
+    func scroll(toRow row: Int, side: SideID? = nil) {
+        reveal(row: row)
+        scrollRequest = ScrollRequest(id: (scrollRequest?.id ?? 0) + 1, row: row, side: side)
     }
 
     /// Copies a change over to the other side. `toRight` copies the left version to the right.
     func copy(hunk index: Int, toRight: Bool) {
         guard let diff, diff.hunks.indices.contains(index) else { return }
         let target: SideID = toRight ? .right : .left
-        setText(diff.copying(hunk: index, toRight: toRight).text, on: target)
+        setDocument(diff.copying(hunk: index, toRight: toRight), on: target)
         // The next change now sits where this one was.
         currentHunk = index < hunkCount - 1 ? index : nil
     }
@@ -304,7 +323,7 @@ final class CompareModel {
     // MARK: Diffing
 
     private func sidesChanged(oldValue: Side, newValue: Side) {
-        guard oldValue.content != newValue.content else { return }
+        guard oldValue.revision != newValue.revision || oldValue.url != newValue.url else { return }
         // Typing recomputes after a short pause; opening or merging recomputes right away.
         scheduleDiff(delay: isEditing ? .milliseconds(150) : .zero)
     }
@@ -313,11 +332,12 @@ final class CompareModel {
         diffTask?.cancel()
         guard !hasBinarySide else {
             diff = nil
-            displayItems = []
+            display = nil
+            isComputing = false
             return
         }
-        let leftDocument = TextDocument(left.text)
-        let rightDocument = TextDocument(right.text)
+        let leftDocument = left.document
+        let rightDocument = right.document
         let options = options
         isComputing = true
         diffTask = Task {
@@ -340,47 +360,24 @@ final class CompareModel {
     /// Folds away long runs of unchanged lines when "Only Changes" is on, keeping a few lines of
     /// context around every change.
     private func rebuildDisplay() {
-        guard let diff else {
-            displayItems = []
-            return
-        }
-        let context = 3
-        var items: [DisplayItem] = []
-        var index = 0
-        let rows = diff.rows
-
-        while index < rows.count {
-            if let hunk = rows[index].hunk {
-                var end = index
-                while end < rows.count, rows[end].hunk == hunk { end += 1 }
-                items.append(.hunk(index: hunk, rows: index..<end))
-                index = end
-                continue
-            }
-
-            var end = index
-            while end < rows.count, rows[end].hunk == nil { end += 1 }
-            let keepBefore = index == 0 ? 0 : context
-            let keepAfter = end == rows.count ? 0 : context
-            let foldStart = index + keepBefore
-            let foldEnd = end - keepAfter
-
-            if onlyChanges, foldEnd - foldStart >= 4, !expandedFolds.contains(foldStart) {
-                items.append(contentsOf: (index..<foldStart).map { .same(row: $0) })
-                items.append(.fold(rows: foldStart..<foldEnd))
-                items.append(contentsOf: (foldEnd..<end).map { .same(row: $0) })
-            } else {
-                items.append(contentsOf: (index..<end).map { .same(row: $0) })
-            }
-            index = end
-        }
-        displayItems = items
+        display = diff.map { DiffDisplay(diff: $0, layout: layout, foldUnchanged: onlyChanges, expandedFolds: expandedFolds) }
+        displayGeneration += 1
     }
 
     /// Unfolds the fold that hides `row`, if any.
     private func reveal(row: Int) {
-        for case .fold(let rows) in displayItems where rows.contains(row) {
-            expand(fold: rows)
+        if let rows = display?.fold(containingRow: row) { expand(fold: rows) }
+    }
+}
+
+extension Side {
+    init(file: FileContent) {
+        switch file.body {
+        case .text(let document, let encoding):
+            self.init(content: .text(document), url: file.url)
+            self.encoding = encoding
+        case .binary(let data):
+            self.init(content: .binary(data), url: file.url)
         }
     }
 }
