@@ -44,11 +44,6 @@ public final class SyntaxHighlightCache: Sendable {
         storage.withLock { $0.tokens[line] }
     }
 
-    /// Whether every line in `lines` has its tokens.
-    public func hasTokens(for lines: Range<Int>) -> Bool {
-        storage.withLock { storage in lines.allSatisfy { storage.tokens[$0] != nil } }
-    }
-
     /// Works out the tokens of `lines`. Slow for a line far below what is known, so call it
     /// off the main thread. Returns false when nothing was kept: the lines are not in the
     /// document, or it changed in the meantime.

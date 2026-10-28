@@ -9,7 +9,11 @@ struct CompareView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.isEmpty && !model.isEditing {
-                EmptyCompareView(model: model, compareFolders: compareFolders)
+                if model.isLoading {
+                    ProgressView("Reading the files…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    EmptyCompareView(model: model, compareFolders: compareFolders)
+                }
             } else {
                 header
                     .padding(.horizontal, 14)
@@ -228,7 +232,7 @@ private struct StatusBar: View {
                     Chip(text: "\(statistics.changed) changed", color: Theme.changed)
                 }
             }
-            if model.isComputing {
+            if model.isComputing || model.isLoading {
                 ProgressView().controlSize(.mini)
             }
 

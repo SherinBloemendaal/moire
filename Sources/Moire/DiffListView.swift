@@ -168,7 +168,6 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
     }
 
-
     // MARK: Table
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -227,6 +226,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         clampHorizontalOffset()
         redrawVisibleRows()
+        editor?.scroll(toOffset: horizontalOffset)
     }
 
     /// Puts a line about a third down the visible area.
