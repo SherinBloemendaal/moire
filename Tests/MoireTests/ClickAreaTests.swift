@@ -43,8 +43,8 @@ enum ClickArea {
     static func expectComfortable(_ names: [String], in host: NSView, sourceLocation: SourceLocation = #_sourceLocation) async throws {
         for name in names {
             try await Press.wait { frame(of: name, in: host) != nil }
-            let frame = try #require(frame(of: name, in: host), "no button \(name)", sourceLocation: sourceLocation)
-            #expect(frame.width >= minimum && frame.height >= minimum, "\(name) takes a click in \(frame.size) only", sourceLocation: sourceLocation)
+            let area = try #require(frame(of: name, in: host), "no button \(name)", sourceLocation: sourceLocation)
+            #expect(area.width >= minimum && area.height >= minimum, "\(name) takes a click in \(area.size) only", sourceLocation: sourceLocation)
         }
     }
 }
