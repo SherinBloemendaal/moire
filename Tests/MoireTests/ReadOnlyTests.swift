@@ -38,6 +38,25 @@ struct ReadOnlyTests {
         try await waitUntil { !model.isLoading && model.diff != nil && !model.isComputing }
     }
 
+    @Test func `offers Copy Change only toward a side that can take it`() async throws {
+        defer { clean() }
+        let model = CompareModel()
+        model.load(try file("mine.txt", in: local, "a\nlocal\nc\n"), into: .left)
+        model.load(try file("theirs.txt", in: download, "a\nserver\nc\n"), into: .right)
+        try await loaded(model)
+        #expect(!model.canCopyCurrentChange(toRight: true))
+        model.goToNextChange()
+        #expect(model.currentHunk == 0)
+
+        // The right side is a copy from a server: nothing can be copied into it.
+        #expect(!model.canCopyCurrentChange(toRight: true))
+        #expect(model.canCopyCurrentChange(toRight: false))
+        model.copyCurrentChange(toRight: true)
+        #expect(model.right.document.text == "a\nserver\nc\n")
+        model.copyCurrentChange(toRight: false)
+        #expect(model.left.document.text == "a\nserver\nc\n")
+    }
+
     @Test func `knows Moire's temporary folders`() {
         #expect(TemporaryCopies.contains(FolderModel.downloads.appending(path: "x/a.txt")))
         #expect(TemporaryCopies.contains(ArchiveExtractor.defaultParent.appending(path: "x/app/a.txt")))

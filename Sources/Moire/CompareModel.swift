@@ -230,6 +230,11 @@ final class CompareModel {
 
     var canEditEitherSide: Bool { canEdit(.left) || canEdit(.right) }
 
+    /// Copy Change to Right/Left: there is a current change and the side it goes to can take it.
+    func canCopyCurrentChange(toRight: Bool) -> Bool {
+        currentHunk != nil && !isEditing && canEdit(toRight ? .right : .left)
+    }
+
     subscript(side: SideID) -> Side {
         get { side == .left ? left : right }
         set {

@@ -24,7 +24,8 @@ final class Windows {
     private var entries: [ObjectIdentifier: Entry] = [:]
     /// Most recently focused first.
     private var order: [ObjectIdentifier] = []
-    private var openWindow: OpenWindowAction?
+    /// Opens a new window; SwiftUI's `openWindow` in the app, a recorder in tests.
+    var opener: ((WindowRequest) -> Void)?
     /// Where a new tab goes: the window that was in front when it was asked for.
     private weak var tabParent: NSWindow?
     /// Files that arrived before any window existed (at launch).
@@ -33,7 +34,9 @@ final class Windows {
     /// A stand-in for the menus while no window is open, so they show disabled instead of failing.
     let placeholder = AppState()
 
-    private init() {
+    /// `observesFocus` is off for windows made in tests, which have no key window to follow.
+    init(observesFocus: Bool = true) {
+        guard observesFocus else { return }
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { notification in
             let window = notification.object as? NSWindow
             MainActor.assumeIsolated {
@@ -54,7 +57,11 @@ final class Windows {
     var frontmost: AppState? { states.first }
 
     func register(_ state: AppState, openWindow: OpenWindowAction) {
-        self.openWindow = openWindow
+        register(state) { openWindow(value: $0) }
+    }
+
+    func register(_ state: AppState, opener: @escaping (WindowRequest) -> Void) {
+        self.opener = opener
         let key = ObjectIdentifier(state)
         if entries[key] == nil { entries[key] = Entry(state: state) }
         focus(state)
@@ -93,8 +100,8 @@ final class Windows {
     }
 
     func newWindow(urls: [URL] = []) {
-        if let openWindow {
-            openWindow(value: WindowRequest(urls: urls))
+        if let opener {
+            opener(WindowRequest(urls: urls))
         } else {
             withFrontmost { $0.open(urls) }
         }
@@ -102,7 +109,7 @@ final class Windows {
 
     func newTab() {
         tabParent = NSApp.keyWindow
-        openWindow?(value: WindowRequest(asTab: true))
+        opener?(WindowRequest(asTab: true))
     }
 
     /// Files from Finder or the Dock: into the front window when it shows nothing yet, otherwise
