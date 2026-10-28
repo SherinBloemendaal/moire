@@ -21,5 +21,10 @@ let package = Package(
         .executableTarget(name: "MoireBench", dependencies: ["MoireKit"]),
         .executableTarget(name: "MoireCLI", dependencies: ["MoireKit"]),
         .testTarget(name: "MoireKitTests", dependencies: ["MoireKit"]),
+        .testTarget(
+            name: "MoireTests",
+            dependencies: ["Moire", "MoireKit"],
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
     ]
 )

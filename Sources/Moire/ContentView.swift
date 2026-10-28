@@ -20,6 +20,9 @@ struct ContentView: View {
             }
         }
         .animation(.smooth(duration: 0.25), value: state.mode)
+        .onChange(of: state.currentSession) { _, session in
+            if let session { state.recents.note(session) }
+        }
         .background(Theme.window)
         .toolbar {
             ToolbarItem(placement: .navigation) {

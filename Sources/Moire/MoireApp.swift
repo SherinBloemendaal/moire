@@ -30,11 +30,16 @@ final class AppState {
     let compare = CompareModel()
     let folders = FolderModel()
     let merge = MergeModel()
+    let recents = RecentSessions()
     /// True while the text comparison shows a pair picked from the folder comparison.
     var cameFromFolders = false
 
     /// Files and folders from Finder, the Dock or the command line.
     func open(_ urls: [URL]) {
+        if let session = urls.first(where: { $0.pathExtension == "moire" }) {
+            openSession(session)
+            return
+        }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         if !folders.isEmpty {
             self.folders.open(folders)
@@ -158,6 +163,14 @@ struct MoireCommands: Commands {
                 if state.folders.left != nil, state.folders.right == nil { state.folders.choose(.right) }
             }
             .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Open Saved Comparison…") {
+                let panel = NSOpenPanel()
+                panel.allowedContentTypes = [ComparisonSession.fileType]
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                state.openSession(url)
+            }
+            RecentSessionsMenu(state: state)
+            Divider()
             Button("Merge Files…") {
                 state.mode = .merge
                 merge.chooseFiles()
@@ -175,6 +188,10 @@ struct MoireCommands: Commands {
             }
             .keyboardShortcut("r")
             .disabled(isMerge ? !merge.isReady : !compare.hasFiles)
+            Divider()
+            Button("Save Comparison As…") { state.saveSessionPanel() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(state.currentSession == nil)
             Divider()
             Button("Export as Patch…") { ComparisonExport.exportPatch(compare) }
                 .disabled(!isText || !ComparisonExport.canExport(compare))
