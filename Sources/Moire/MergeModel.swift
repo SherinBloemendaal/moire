@@ -84,7 +84,12 @@ final class MergeModel {
     /// Started by `git mergetool`: quitting without a clean save exits with a failure.
     private(set) var isMergetool = false
     /// Resolutions changed since the files were opened or last saved.
-    private(set) var isDirty = false
+    private var resolutionsChanged = false
+    /// The hand edit's text as it was when the edit began.
+    private var editStart = ""
+    /// Something is not saved: a resolution changed, or text was typed into the hand edit that
+    /// is still open, which a save takes in.
+    var isDirty: Bool { resolutionsChanged || (editingChunk != nil && editDraft != editStart) }
     /// The last save had no conflict markers left in it.
     private(set) var savedResolved = false
     var errorMessage: String?
@@ -176,7 +181,8 @@ final class MergeModel {
 
     func reload() {
         guard canDiscardResolutions() else { return }
-        isDirty = false
+        resolutionsChanged = false
+        editingChunk = nil
         for version in ThreeWayMerge.Version.allCases {
             if let url = sources[version]?.url { load(url, into: version, allowMissing: version == .base) }
         }
@@ -210,10 +216,9 @@ final class MergeModel {
         guard let destination else { return false }
 
         do {
-            let text = merge.result(resolutions, labels: labels).text
-            try self[.left].encoding.encode(text).write(to: destination, options: .atomic)
+            try FileWriter.write(self[.left].encoding.encode(merge.result(resolutions, labels: labels)), to: destination)
             output = destination
-            isDirty = false
+            resolutionsChanged = false
             savedResolved = unresolved == 0
             return true
         } catch {
@@ -248,7 +253,7 @@ final class MergeModel {
         } else {
             resolutions[chunk] = resolution
         }
-        isDirty = true
+        resolutionsChanged = true
         currentChunk = chunk
     }
 
@@ -257,7 +262,7 @@ final class MergeModel {
         guard resolutions[chunk] != nil else { return }
         if editingChunk == chunk { editingChunk = nil }
         resolutions[chunk] = nil
-        isDirty = true
+        resolutionsChanged = true
     }
 
     func resolution(of chunk: Int) -> ThreeWayMerge.Resolution? {
@@ -283,6 +288,7 @@ final class MergeModel {
             ?? merge.resolvedLines(of: chunk, resolution: .leftThenRight)
             ?? []
         editDraft = TextDocument(textLines: lines, lineEnding: .lf).text
+        editStart = editDraft
         editingChunk = chunk
         currentChunk = chunk
     }
@@ -350,7 +356,7 @@ final class MergeModel {
         resolutions = [:]
         currentChunk = nil
         editingChunk = nil
-        isDirty = false
+        resolutionsChanged = false
         guard isReady else {
             merge = nil
             items = []

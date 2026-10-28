@@ -68,6 +68,8 @@ public struct ThreeWayMerge: Sendable {
     public let base: [TextLine]
     public let left: [TextLine]
     public let right: [TextLine]
+    /// The versions as read, so lines taken from them are written with their own bytes.
+    private let documents: [Version: TextDocument]
     /// The line ending of the result: the left side's, unless it is empty.
     public let lineEnding: TextDocument.LineEnding
     public let chunks: [Chunk]
@@ -78,6 +80,7 @@ public struct ThreeWayMerge: Sendable {
         self.base = base.textLines
         self.left = left.textLines
         self.right = right.textLines
+        documents = [.base: base, .left: left, .right: right]
         lineEnding = [left, right, base].first { !$0.lines.isEmpty }?.lineEnding ?? left.lineEnding
 
         var interner = TextLineInterner()
@@ -124,31 +127,97 @@ public struct ThreeWayMerge: Sendable {
         conflicts.filter { resolutions[$0] == nil }
     }
 
-    /// The merged lines. A conflict without a resolution is written with diff3-style markers
+    /// A run of the result: lines of one version, or lines that are not in any of them.
+    private enum Segment {
+        case version(Version, Range<Int>)
+        /// Typed by hand, or a conflict marker. `terminated` lines always end with a break.
+        case lines([TextLine])
+        case terminated(Version, Range<Int>)
+    }
+
+    private func range(of version: Version, in chunk: Int) -> Range<Int> {
+        switch version {
+        case .base: chunks[chunk].base
+        case .left: chunks[chunk].left
+        case .right: chunks[chunk].right
+        }
+    }
+
+    private func textLines(of version: Version) -> [TextLine] {
+        switch version {
+        case .base: base
+        case .left: left
+        case .right: right
+        }
+    }
+
+    /// The result as runs. A conflict without a resolution is written with diff3-style markers
     /// around all three versions, the way `git merge` leaves it.
-    public func resultLines(_ resolutions: [Int: Resolution], labels: Labels = Labels()) -> [TextLine] {
-        var result: [TextLine] = []
+    private func segments(_ resolutions: [Int: Resolution], labels: Labels) -> [Segment] {
+        var result: [Segment] = []
         for index in chunks.indices {
-            if let lines = resolvedLines(of: index, resolution: resolutions[index]) {
-                result.append(contentsOf: lines)
+            guard let resolution = resolutions[index] ?? automaticResolution(of: index) else {
+                result.append(.lines([TextLine("<<<<<<< \(labels.left)")]))
+                result.append(.terminated(.left, range(of: .left, in: index)))
+                result.append(.lines([TextLine("||||||| \(labels.base)")]))
+                result.append(.terminated(.base, range(of: .base, in: index)))
+                result.append(.lines([TextLine("=======")]))
+                result.append(.terminated(.right, range(of: .right, in: index)))
+                result.append(.lines([TextLine(">>>>>>> \(labels.right)")]))
                 continue
             }
-            func terminated(_ lines: ArraySlice<TextLine>) -> [TextLine] {
-                lines.map { TextLine($0.text) }
+            switch resolution {
+            case .left: result.append(.version(.left, range(of: .left, in: index)))
+            case .right: result.append(.version(.right, range(of: .right, in: index)))
+            case .base: result.append(.version(.base, range(of: .base, in: index)))
+            case .leftThenRight:
+                result.append(.version(.left, range(of: .left, in: index)))
+                result.append(.version(.right, range(of: .right, in: index)))
+            case .rightThenLeft:
+                result.append(.version(.right, range(of: .right, in: index)))
+                result.append(.version(.left, range(of: .left, in: index)))
+            case .edited(let lines): result.append(.lines(lines))
             }
-            result.append(TextLine("<<<<<<< \(labels.left)"))
-            result.append(contentsOf: terminated(lines(of: .left, in: index)))
-            result.append(TextLine("||||||| \(labels.base)"))
-            result.append(contentsOf: terminated(lines(of: .base, in: index)))
-            result.append(TextLine("======="))
-            result.append(contentsOf: terminated(lines(of: .right, in: index)))
-            result.append(TextLine(">>>>>>> \(labels.right)"))
         }
         return result
     }
 
+    /// The merged lines.
+    public func resultLines(_ resolutions: [Int: Resolution], labels: Labels = Labels()) -> [TextLine] {
+        var result: [TextLine] = []
+        for segment in segments(resolutions, labels: labels) {
+            switch segment {
+            case .version(let version, let range): result.append(contentsOf: textLines(of: version)[range])
+            case .terminated(let version, let range): result.append(contentsOf: textLines(of: version)[range].map { TextLine($0.text) })
+            case .lines(let lines): result.append(contentsOf: lines)
+            }
+        }
+        return result
+    }
+
+    /// The merged document. Lines taken from a version keep their bytes and, where it differs
+    /// from that version's usual break, their own line break; the rest get `lineEnding`.
     public func result(_ resolutions: [Int: Resolution], labels: Labels = Labels()) -> TextDocument {
-        TextDocument(textLines: resultLines(resolutions, labels: labels), lineEnding: lineEnding)
+        var pieces: [Lines.Piece] = []
+        var endsWithLineBreak = true
+        for segment in segments(resolutions, labels: labels) {
+            switch segment {
+            case .version(let version, let range), .terminated(let version, let range):
+                guard !range.isEmpty, let document = documents[version] else { continue }
+                pieces.append(contentsOf: document.lines.pieces(in: range))
+                if case .version = segment {
+                    endsWithLineBreak = textLines(of: version)[range.upperBound - 1].hasLineBreak
+                } else {
+                    endsWithLineBreak = true
+                }
+            case .lines(let typed):
+                guard let last = typed.last else { continue }
+                pieces.append(.strings(ArraySlice(typed.map(\.text))))
+                endsWithLineBreak = last.hasLineBreak
+            }
+        }
+        let own = Version.allCases.flatMap { documents[$0]?.ownBuffers ?? [] }
+        return TextDocument(lines: Lines(pieces: pieces), lineEnding: lineEnding, endsWithLineBreak: endsWithLineBreak, ownBuffers: own)
     }
 
     // MARK: Chunks

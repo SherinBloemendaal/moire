@@ -25,10 +25,16 @@ public enum DocumentText {
     /// removes spaces at line ends, and keeps at most one empty line in a row.
     public static func normalize(_ text: String) -> String {
         var scalars = String.UnicodeScalarView()
+        var previousWasCR = false
         for scalar in text.unicodeScalars {
+            defer { previousWasCR = scalar == "\r" }
             switch scalar {
-            // Line and paragraph separators, form feed, vertical tab and next line.
-            case "\u{2028}", "\u{2029}", "\u{0C}", "\u{0B}", "\u{85}":
+            // The "\n" of a "\r\n" that already became one.
+            case "\n" where previousWasCR:
+                continue
+            // Every kind of break: a lone "\r" would otherwise stay inside its line. Also line and
+            // paragraph separators, form feed, vertical tab and next line.
+            case "\r", "\u{2028}", "\u{2029}", "\u{0C}", "\u{0B}", "\u{85}":
                 scalars.append("\n")
             // Soft hyphen, zero width space and joiners, byte order mark, and the attachment
             // character that stands in for images.

@@ -58,7 +58,14 @@ final class DocumentModel: DifferenceNavigating {
     private(set) var isReading = false
 
     init() {
-        text.isReadOnly = true
+        text.left = Self.readOnly(nil)
+        text.right = Self.readOnly(nil)
+    }
+
+    private static func readOnly(_ document: TextDocument?) -> Side {
+        var side = Side(content: .text(document ?? TextDocument("")))
+        side.isReadOnly = true
+        return side
     }
 
     var differenceCount: Int { text.hunkCount }
@@ -78,8 +85,8 @@ final class DocumentModel: DifferenceNavigating {
             let rightDocument = try b.get()
             leftPages = leftDocument?.pageCount
             rightPages = rightDocument?.pageCount
-            text.left = Side(content: .text(leftDocument?.document ?? TextDocument("")))
-            text.right = Side(content: .text(rightDocument?.document ?? TextDocument("")))
+            text.left = Self.readOnly(leftDocument?.document)
+            text.right = Self.readOnly(rightDocument?.document)
         } catch {
             errorMessage = error.localizedDescription
         }

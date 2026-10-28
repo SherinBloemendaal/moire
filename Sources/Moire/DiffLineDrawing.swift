@@ -164,7 +164,11 @@ extension DiffListController {
         if length < utf16.length, length > 0 {
             length = utf16.rangeOfComposedCharacterSequence(at: length).location
         }
-        let shown = NSMutableAttributedString(string: utf16.substring(to: length), attributes: [
+        var visible = utf16.substring(to: length)
+        // A carriage return inside a line would start a new line out of sight; it is shown as
+        // a symbol of the same length, so every range below still fits.
+        if visible.contains("\r") { visible = visible.replacingOccurrences(of: "\r", with: "\u{240D}") }
+        let shown = NSMutableAttributedString(string: visible, attributes: [
             .font: metrics.font,
             .foregroundColor: Palette.text,
             .paragraphStyle: metrics.paragraph,
@@ -273,8 +277,10 @@ extension DiffListController {
         capsule.stroke()
         Palette.paneBorder.setFill()
         NSRect(x: frame.midX - 0.5, y: frame.midY - 6, width: 1, height: 12).fill()
-        for (name, x) in [("arrow.right", frame.minX + frame.width / 4), ("arrow.left", frame.minX + frame.width * 3 / 4)] {
-            guard let image = DiffSymbols.image(name, size: 10, color: Palette.iris) else { continue }
+        for (name, x, side) in [("arrow.right", frame.minX + frame.width / 4, SideID.right), ("arrow.left", frame.minX + frame.width * 3 / 4, .left)] {
+            // Copying into a read-only side is not offered; its arrow is shown faded.
+            let color = model.canEdit(side) ? Palette.iris : Palette.gutterText
+            guard let image = DiffSymbols.image(name, size: 10, color: color) else { continue }
             image.draw(in: NSRect(x: x - image.size.width / 2, y: frame.midY - image.size.height / 2, width: image.size.width, height: image.size.height))
         }
     }

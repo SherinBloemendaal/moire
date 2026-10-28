@@ -398,8 +398,9 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if case .fold(let rows) = item { return .fold(rows) }
         if let hunk = hunk(atLine: line), showsMergeButtons(hunk: hunk), display.lines(ofHunk: hunk)?.lowerBound == line {
             let frame = mergeButtonFrame()
-            if frame.contains(point) {
-                return .mergeButton(hunk: hunk, toRight: point.x < frame.midX)
+            let toRight = point.x < frame.midX
+            if frame.contains(point), model.canEdit(toRight ? .right : .left) {
+                return .mergeButton(hunk: hunk, toRight: toRight)
             }
         }
         guard let row = item.row else { return .row }
@@ -430,13 +431,15 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         let menu = NSMenu()
         let diff = display.diff
         if let hunk = hunk(atLine: line) {
-            if !model.isReadOnly {
-                menu.addItem(MenuAction.item("Copy Change to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) })
-                menu.addItem(MenuAction.item("Copy Change to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) })
+            let toRight = model.canEdit(.right)
+            let toLeft = model.canEdit(.left)
+            if toRight || toLeft {
+                if toRight { menu.addItem(MenuAction.item("Copy Change to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) }) }
+                if toLeft { menu.addItem(MenuAction.item("Copy Change to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) }) }
                 if let row = display[line].row {
                     menu.addItem(.separator())
-                    menu.addItem(MenuAction.item("Copy This Line to Right", image: "arrow.right.to.line") { [model] in model.copy(row: row, toRight: true) })
-                    menu.addItem(MenuAction.item("Copy This Line to Left", image: "arrow.left.to.line") { [model] in model.copy(row: row, toRight: false) })
+                    if toRight { menu.addItem(MenuAction.item("Copy This Line to Right", image: "arrow.right.to.line") { [model] in model.copy(row: row, toRight: true) }) }
+                    if toLeft { menu.addItem(MenuAction.item("Copy This Line to Left", image: "arrow.left.to.line") { [model] in model.copy(row: row, toRight: false) }) }
                 }
                 menu.addItem(.separator())
             }
@@ -494,25 +497,27 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     /// The buttons that copy one line, shown on the line under the mouse in a change: at the
     /// outer edge of each side, pointing to the other side, or in place of the sign in unified.
     func lineButtons(for item: DiffDisplay.Line) -> [(frame: NSRect, toRight: Bool)] {
-        guard let display, !model.isReadOnly else { return [] }
+        guard let display else { return [] }
         let size = NSSize(width: DiffMetrics.actionWidth, height: metrics.lineHeight)
+        let buttons: [(frame: NSRect, toRight: Bool)]
         switch item {
         case .row where display.layout == .sideBySide:
             let left = NSPoint(x: sideFrame(.left).minX + 1, y: 0)
             let right = NSPoint(x: sideFrame(.right).maxX - size.width - 1, y: 0)
-            return [(NSRect(origin: left, size: size), true), (NSRect(origin: right, size: size), false)]
+            buttons = [(NSRect(origin: left, size: size), true), (NSRect(origin: right, size: size), false)]
         case .removed, .added:
             let x = unifiedTextX - DiffMetrics.signWidth + (DiffMetrics.signWidth - size.width) / 2
             let isLeft = if case .removed = item { true } else { false }
-            return [(NSRect(origin: NSPoint(x: x, y: 0), size: size), isLeft)]
+            buttons = [(NSRect(origin: NSPoint(x: x, y: 0), size: size), isLeft)]
         default:
-            return []
+            buttons = []
         }
+        return buttons.filter { model.canEdit($0.toRight ? .right : .left) }
     }
 
-    /// Read-only comparisons (documents, copies of server files) have nothing to copy into.
+    /// A read-only side (a document, a copy of a server file) has nothing to copy into.
     func showsMergeButtons(hunk: Int) -> Bool {
-        !model.isReadOnly && (hoveredHunk == hunk || state?.currentHunk == hunk)
+        model.canEditEitherSide && (hoveredHunk == hunk || state?.currentHunk == hunk)
     }
 
     var currentHunk: Int? { state?.currentHunk }

@@ -55,8 +55,11 @@ final class RecentSessions {
         }
     }
 
+    /// Remembers a comparison. One with a side in a temporary folder is left out: that copy is
+    /// gone by the time it would be opened again.
     func note(_ session: ComparisonSession) {
-        guard session.left != nil, session.right != nil else { return }
+        guard let left = session.left, let right = session.right else { return }
+        guard !TemporaryCopies.contains(left), !TemporaryCopies.contains(right) else { return }
         sessions.removeAll { $0.id == session.id }
         sessions.insert(session, at: 0)
         if sessions.count > limit { sessions.removeLast(sessions.count - limit) }
@@ -75,15 +78,19 @@ final class RecentSessions {
 }
 
 extension AppState {
-    /// What is on screen now, as a session.
+    /// What is on screen now, as a session. An unpacked archive is kept as the archive itself,
+    /// which is unpacked again when the session is opened.
     var currentSession: ComparisonSession? {
         switch mode {
         case .folders:
             guard folders.left != nil || folders.right != nil else { return nil }
+            func path(_ folder: URL?) -> String? {
+                folder.map { folders.archiveOrigins[$0] ?? $0 }?.path(percentEncoded: false)
+            }
             return ComparisonSession(
                 kind: .folders,
-                left: folders.left?.path(percentEncoded: false),
-                right: folders.right?.path(percentEncoded: false),
+                left: path(folders.left),
+                right: path(folders.right),
                 method: folders.method.rawValue,
                 skipHidden: folders.skipHidden,
                 include: folders.includeText,
@@ -120,6 +127,10 @@ extension AppState {
             if let include = session.include { folders.includeText = include }
             if let exclude = session.exclude { folders.excludeText = exclude }
             if let useGitignore = session.useGitignore { folders.useGitignore = useGitignore }
+            if [leftURL, rightURL].contains(where: { $0.map(ArchiveRouter.isArchive) == true }) {
+                openArchives(left: leftURL, right: rightURL)
+                return
+            }
             folders.left = leftURL
             folders.right = rightURL
             mode = .folders

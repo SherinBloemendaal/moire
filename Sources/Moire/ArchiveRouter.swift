@@ -9,6 +9,12 @@ final class ArchiveRouter {
     /// Archive names being unpacked, for a progress message.
     private(set) var unpacking: [String] = []
     @ObservationIgnored private var extracted: [ExtractedArchive] = []
+    /// The router of every window, to name files of archives any of them unpacked.
+    private static let routers = NSHashTable<ArchiveRouter>.weakObjects()
+
+    init() {
+        Self.routers.add(self)
+    }
     @ObservationIgnored private var task: Task<Void, Never>?
 
     enum RouteError: LocalizedError {
@@ -26,6 +32,21 @@ final class ArchiveRouter {
     func archive(for folder: URL?) -> URL? {
         guard let folder else { return nil }
         return extracted.first { $0.folder == folder }?.archive
+    }
+
+    /// Where a file of an unpacked archive came from, e.g. `~/Downloads/app.zip/src`, to show
+    /// instead of its temporary folder. Nil for a file that is not in one.
+    static func origin(of url: URL) -> String? {
+        let path = url.standardizedFileURL.path(percentEncoded: false)
+        for extracted in routers.allObjects.flatMap(\.extracted) {
+            var prefix = extracted.folder.standardizedFileURL.path(percentEncoded: false)
+            if !prefix.hasSuffix("/") { prefix += "/" }
+            guard path.hasPrefix(prefix) else { continue }
+            let parent = (String(path.dropFirst(prefix.count)) as NSString).deletingLastPathComponent
+            let name = (extracted.archive.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
+            return parent.isEmpty ? name : name + "/" + parent
+        }
+        return nil
     }
 
     /// Whether a URL is something this router opens: an archive, as opposed to a folder or file.

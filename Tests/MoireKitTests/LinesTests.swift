@@ -2,38 +2,46 @@ import Foundation
 @testable import MoireKit
 import Testing
 
-/// The splitter Moire used before lines were read from bytes, as a reference.
+/// A plain splitter to check the fast one against: the most common break wins, and a lone `\r`
+/// only ends a line when it is that break.
 private func referenceSplit(_ text: String) -> (lines: [String], ending: TextDocument.LineEnding, endsWithLineBreak: Bool) {
-    var lines: [String] = []
+    let scalars = Array(text.unicodeScalars)
     var counts: [TextDocument.LineEnding: Int] = [:]
-    var current = ""
-    var previousWasCR = false
-    for scalar in text.unicodeScalars {
-        switch scalar {
-        case "\n":
-            if previousWasCR {
-                counts[.cr, default: 0] -= 1
-                counts[.crlf, default: 0] += 1
-            } else {
-                lines.append(current)
-                current = ""
-                counts[.lf, default: 0] += 1
-            }
-            previousWasCR = false
-        case "\r":
-            lines.append(current)
-            current = ""
+    for (index, scalar) in scalars.enumerated() {
+        if scalar == "\n" {
+            counts[index > 0 && scalars[index - 1] == "\r" ? .crlf : .lf, default: 0] += 1
+        } else if scalar == "\r", index + 1 == scalars.count || scalars[index + 1] != "\n" {
             counts[.cr, default: 0] += 1
-            previousWasCR = true
-        default:
-            current.unicodeScalars.append(scalar)
-            previousWasCR = false
         }
     }
-    let endsWithLineBreak = current.isEmpty && !lines.isEmpty
-    if !endsWithLineBreak, !(current.isEmpty && lines.isEmpty) { lines.append(current) }
     let ending = [TextDocument.LineEnding.lf, .crlf, .cr].max { counts[$0, default: 0] < counts[$1, default: 0] } ?? .lf
-    return (lines, counts.values.contains { $0 > 0 } ? ending : .lf, endsWithLineBreak)
+    let resolved = counts.values.contains { $0 > 0 } ? ending : .lf
+
+    var lines: [String] = []
+    var current = String.UnicodeScalarView()
+    var index = 0
+    var endsWithBreak = false
+    while index < scalars.count {
+        let scalar = scalars[index]
+        endsWithBreak = false
+        if scalar == "\r", index + 1 < scalars.count, scalars[index + 1] == "\n" {
+            lines.append(String(current))
+            current = String.UnicodeScalarView()
+            index += 2
+            endsWithBreak = true
+            continue
+        }
+        if scalar == "\n" || (scalar == "\r" && resolved == .cr) {
+            lines.append(String(current))
+            current = String.UnicodeScalarView()
+            endsWithBreak = true
+        } else {
+            current.append(scalar)
+        }
+        index += 1
+    }
+    if !endsWithBreak, !scalars.isEmpty { lines.append(String(current)) }
+    return (lines, resolved, endsWithBreak)
 }
 
 private func randomText(length: Int, using generator: inout some RandomNumberGenerator) -> String {
@@ -42,7 +50,7 @@ private func randomText(length: Int, using generator: inout some RandomNumberGen
 }
 
 struct LinesTests {
-    @Test func `splits like the old splitter`() {
+    @Test func `splits like a plain splitter and writes every byte back`() {
         var generator = SystemRandomNumberGenerator()
         for _ in 0..<500 {
             let text = randomText(length: Int.random(in: 0...40, using: &generator), using: &generator)
@@ -51,9 +59,8 @@ struct LinesTests {
             #expect(Array(document.lines) == reference.lines, "\(text.debugDescription)")
             #expect(document.lineEnding == reference.ending, "\(text.debugDescription)")
             #expect(document.endsWithLineBreak == reference.endsWithLineBreak, "\(text.debugDescription)")
-            // Mixed breaks are written back with the most common one, as before.
-            let joined = reference.lines.joined(separator: reference.ending.rawValue) + (reference.endsWithLineBreak ? reference.ending.rawValue : "")
-            #expect(document.text == joined)
+            // Every break is written back as it was read.
+            #expect(document.text == text, "\(text.debugDescription)")
         }
     }
 

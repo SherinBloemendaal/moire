@@ -56,7 +56,7 @@ struct ContentView: View {
                         Label(state.compare.isEditing ? "Done" : "Edit", systemImage: state.compare.isEditing ? "checkmark" : "pencil")
                     }
                     .toggleStyle(.button)
-                    .disabled(state.compare.hasBinarySide || !state.compare.fileView.allowsEditing)
+                    .disabled(state.compare.hasBinarySide || !state.compare.canEditEitherSide || !state.compare.fileView.allowsEditing)
                     .help(state.compare.isEditing ? "Show the differences (⌘E)" : "Edit both sides (⌘E)")
                 }
             }
