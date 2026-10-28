@@ -30,17 +30,14 @@ public enum FileKind: Sendable, Hashable {
     /// Anything else: compared byte by byte.
     case binary
 
-    /// Looks at the name and the first bytes, then asks ImageIO about anything that is not
+    /// Looks at the name and the first bytes, then asks ImageIO about binary files that are not
     /// recognized otherwise, so every image format the system can read counts as an image.
+    /// Images stored as text, such as SVG, stay text.
     public static func detect(_ url: URL) -> FileKind {
         let header = (try? readHeader(of: url)) ?? Data()
         let kind = sniff(header: header, fileName: url.lastPathComponent)
-        switch kind {
-        case .text, .binary:
-            return imageIOCanRead(url) && !header.isEmpty ? .image : kind
-        default:
-            return kind
-        }
+        guard kind == .binary else { return kind }
+        return imageIOCanRead(url) ? .image : kind
     }
 
     /// The bytes that `sniff` looks at.

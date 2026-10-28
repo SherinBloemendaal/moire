@@ -67,6 +67,17 @@ private func write(_ image: CGImage, as type: String, to url: URL) throws {
         #expect(FileKind.detect(png) == .image)
     }
 
+    @Test func `formats without a known signature are found through ImageIO`() throws {
+        let type = "com.truevision.tga-image"
+        let supported = (CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []).contains(type)
+        try #require(supported, "ImageIO cannot write TGA on this Mac")
+        let url = FileManager.default.temporaryDirectory.appending(path: "moire-\(UUID().uuidString).tga")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try write(try makeImage(), as: type, to: url)
+        #expect(FileKind.sniff(header: try FileKind.readHeader(of: url), fileName: url.lastPathComponent) == .binary)
+        #expect(FileKind.detect(url) == .image)
+    }
+
     @Test func `one changed pixel is found and the tolerance hides a small change`() throws {
         let difference = try PixelDifference(left: try makeImage(), right: try makeImage(change: ((5, 7), 3)))
         #expect(!difference.isIdentical)
