@@ -602,9 +602,7 @@ private struct ResolveBar: View {
         }
         .padding(.horizontal, 3)
         .frame(height: 22)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Theme.paneBorder))
-        .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        .glass(in: Capsule())
     }
 
     private var divider: some View {
@@ -811,9 +809,11 @@ private struct MergeEmptyView: View {
                     .textSelection(.enabled)
             }
             .padding(40)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(isTargeted ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.paneBorder), lineWidth: isTargeted ? 2 : 1))
-            .shadow(color: .black.opacity(0.12), radius: 30, y: 10)
+            .glass(in: RoundedRectangle(cornerRadius: 24), fallback: .ultraThinMaterial)
+            .overlay {
+                if isTargeted { RoundedRectangle(cornerRadius: 24).strokeBorder(Theme.brand, lineWidth: 2) }
+            }
+            .cardShadow()
             .scaleEffect(isTargeted ? 1.03 : 1)
             .animation(.spring(duration: 0.35, bounce: 0.3), value: isTargeted)
         }
@@ -852,7 +852,7 @@ private struct SourceSlot: View {
                     .truncationMode(.middle)
             }
             .frame(width: 150, height: 110)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .glass(in: RoundedRectangle(cornerRadius: 14), interactive: true)
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
                     .strokeBorder(isTargeted || isHovered ? AnyShapeStyle(color) : AnyShapeStyle(Theme.paneBorder), style: StrokeStyle(lineWidth: isTargeted ? 2 : 1, dash: source.url == nil ? [5, 4] : []))

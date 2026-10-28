@@ -180,3 +180,50 @@ struct Chip: View {
         .background(color.opacity(0.12), in: Capsule())
     }
 }
+
+extension View {
+    /// Liquid Glass on macOS 26 and later; before that the frosted material Moire always used.
+    /// Glass is for what floats above the content (cards, bars, buttons), never for the text itself.
+    @ViewBuilder
+    func glass(in shape: some InsettableShape, tint: Color? = nil, interactive: Bool = false, fallback: Material = .regularMaterial) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
+        } else {
+            background(fallback, in: shape)
+                .overlay(shape.strokeBorder(Theme.paneBorder))
+        }
+    }
+
+    /// A bar of controls that floats as glass on macOS 26 and later, and stays flat before that.
+    @ViewBuilder
+    func glassBar() -> some View {
+        if #available(macOS 26, *) {
+            padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .glassEffect(.regular, in: Capsule())
+        } else {
+            self
+        }
+    }
+
+    /// The window's own toolbar: on macOS 26 and later its band is hidden, so the controls float
+    /// as glass over the window; before that it takes the window color.
+    @ViewBuilder
+    func windowToolbarSurface() -> some View {
+        if #available(macOS 26, *) {
+            toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            toolbarBackground(Theme.window, for: .windowToolbar)
+        }
+    }
+
+    /// The drop shadow for a floating card; glass draws its own.
+    @ViewBuilder
+    func cardShadow() -> some View {
+        if #available(macOS 26, *) {
+            self
+        } else {
+            shadow(color: .black.opacity(0.12), radius: 30, y: 10)
+        }
+    }
+}

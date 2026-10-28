@@ -49,6 +49,7 @@ struct FindBar: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+        .glassBar()
         .onAppear { isFocused = true }
         .onChange(of: model.searchFocusRequest) { isFocused = true }
     }

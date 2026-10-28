@@ -61,6 +61,6 @@ struct ContentView: View {
                 }
             }
         }
-        .toolbarBackground(Theme.window, for: .windowToolbar)
+        .windowToolbarSurface()
     }
 }

@@ -56,6 +56,7 @@ struct FolderView: View {
             .padding(.horizontal, 14)
 
             statusBar
+                .glassBar()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
         }
@@ -120,7 +121,7 @@ struct FolderView: View {
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                 }
                 .padding(30)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .glass(in: RoundedRectangle(cornerRadius: 20), fallback: .ultraThinMaterial)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "folder.badge.questionmark")
@@ -135,7 +136,7 @@ struct FolderView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(30)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .glass(in: RoundedRectangle(cornerRadius: 20), fallback: .ultraThinMaterial)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

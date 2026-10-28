@@ -85,7 +85,9 @@ struct CompareView: View {
                 VStack(spacing: 0) {
                     if model.isSearchVisible {
                         FindBar(model: model)
-                        Rectangle().fill(Theme.paneBorder).frame(height: 1)
+                        if #unavailable(macOS 26) {
+                            Rectangle().fill(Theme.paneBorder).frame(height: 1)
+                        }
                     }
                     DiffPane(model: model, display: display)
                 }
@@ -396,9 +398,11 @@ private struct EmptyCompareView: View {
                 }
             }
             .padding(40)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(isTargeted ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.paneBorder), lineWidth: isTargeted ? 2 : 1))
-            .shadow(color: .black.opacity(0.12), radius: 30, y: 10)
+            .glass(in: RoundedRectangle(cornerRadius: 24), fallback: .ultraThinMaterial)
+            .overlay {
+                if isTargeted { RoundedRectangle(cornerRadius: 24).strokeBorder(Theme.brand, lineWidth: 2) }
+            }
+            .cardShadow()
             .scaleEffect(isTargeted ? 1.03 : 1)
             .animation(.spring(duration: 0.35, bounce: 0.3), value: isTargeted)
         }
@@ -418,10 +422,24 @@ struct GlowButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
-            .background(Theme.brand, in: Capsule())
-            .shadow(color: Theme.iris.opacity(configuration.isPressed ? 0.2 : 0.45), radius: 12, y: 4)
+            .modifier(GlowSurface(isPressed: configuration.isPressed))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+/// The brand gradient with a glow; on macOS 26 and later, glass tinted in the brand color.
+private struct GlowSurface: ViewModifier {
+    let isPressed: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content.glassEffect(.regular.tint(Theme.iris).interactive(), in: Capsule())
+        } else {
+            content
+                .background(Theme.brand, in: Capsule())
+                .shadow(color: Theme.iris.opacity(isPressed ? 0.2 : 0.45), radius: 12, y: 4)
+        }
     }
 }
 
@@ -431,8 +449,7 @@ struct GlassButtonStyle: ButtonStyle {
             .font(.system(size: 13, weight: .medium))
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
-            .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.paneBorder))
+            .glass(in: Capsule(), interactive: true)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)
     }
