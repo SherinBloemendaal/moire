@@ -1,4 +1,5 @@
 import AppKit
+import MoireKit
 import SwiftUI
 
 @main
@@ -30,9 +31,29 @@ final class AppState {
     let folders = FolderModel()
     /// True while the text comparison shows a pair picked from the folder comparison.
     var cameFromFolders = false
+    /// Archives unpacked for the folder comparison.
+    let archives = ArchiveRouter()
+
+    init() {
+        compare.fileView.openArchivesAsFolders = { [weak self] left, right, automatic in
+            // A pair of archives opened from inside the folder comparison does not replace it
+            // on its own; the archive view offers the button instead.
+            guard let self, !(automatic && mode == .folders) else { return }
+            openArchives(left: left, right: right)
+        }
+        watchFolders()
+    }
 
     /// Files and folders from Finder, the Dock or the command line.
     func open(_ urls: [URL]) {
+        if urls.contains(where: ArchiveRouter.isArchive), urls.allSatisfy({ ArchiveRouter.isArchive($0) || ArchiveRouter.isFolder($0) }) {
+            if urls.count >= 2 {
+                openArchives(left: urls[0], right: urls[1])
+            } else {
+                openArchives(left: folders.left == nil ? urls[0] : nil, right: folders.left == nil ? nil : urls[0])
+            }
+            return
+        }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         if !folders.isEmpty {
             self.folders.open(folders)
@@ -40,6 +61,37 @@ final class AppState {
         } else {
             compare.open(urls)
             mode = .text
+        }
+    }
+
+    /// Unpacks archives (a side may also be a folder) and compares them in the folder comparison.
+    func openArchives(left: URL?, right: URL?) {
+        compare.fileView.isOpeningArchives = true
+        archives.open(left: left, right: right) { [weak self] message in
+            guard let self else { return }
+            compare.fileView.isOpeningArchives = false
+            if mode == .folders { folders.errorMessage = message } else { compare.errorMessage = message }
+        } done: { [weak self] left, right in
+            guard let self else { return }
+            compare.fileView.isOpeningArchives = false
+            if let left { folders.left = left }
+            if let right { folders.right = right }
+            cameFromFolders = false
+            withAnimation(.smooth(duration: 0.3)) { mode = .folders }
+        }
+    }
+
+    /// Removes unpacked archives as soon as the folder comparison stops showing them.
+    private func watchFolders() {
+        withObservationTracking {
+            _ = folders.left
+            _ = folders.right
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                archives.release(keeping: [folders.left, folders.right])
+                watchFolders()
+            }
         }
     }
 
@@ -54,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let state = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Task.detached(priority: .background) { ArchiveExtractor.removeLeftovers() }
         // `open -a Moire --args left.txt right.txt`, or a difftool configured to run the binary.
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
@@ -63,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         state.open(urls)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        state.archives.removeAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

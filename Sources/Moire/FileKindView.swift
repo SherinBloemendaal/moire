@@ -13,7 +13,7 @@ struct FileKindView: View {
         case .image: ImageCompareView(compare: model)
         case .table: TableCompareView(compare: model)
         case .document: DocumentCompareView(compare: model)
-        case .archive: HexCompareView(compare: model)
+        case .archive: ArchiveCardView(compare: model)
         }
     }
 }
