@@ -75,6 +75,9 @@ enum Palette {
     static let addedNumber = NSColor.dynamic(light: 0x059669, dark: 0x34D399, lightAlpha: 0.8, darkAlpha: 0.8)
     static let removedNumber = NSColor.dynamic(light: 0xE11D48, dark: 0xFB7185, lightAlpha: 0.8, darkAlpha: 0.8)
     static let changed = NSColor.dynamic(light: 0xD97706, dark: 0xFBBF24)
+    static let searchMatch = NSColor.dynamic(light: 0xFACC15, dark: 0xFACC15, lightAlpha: 0.45, darkAlpha: 0.32)
+    static let currentMatch = NSColor.dynamic(light: 0xF59E0B, dark: 0xF59E0B, lightAlpha: 0.85, darkAlpha: 0.7)
+    static let flash = NSColor.dynamic(light: 0x7C5CFF, dark: 0x7C5CFF, lightAlpha: 0.16, darkAlpha: 0.24)
 }
 
 /// Two sets of rings drifting over each other: the moiré that gives the app its name.

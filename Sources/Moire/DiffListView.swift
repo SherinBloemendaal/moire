@@ -9,6 +9,8 @@ struct DiffListState: Equatable {
     var currentHunk: Int?
     var fontSize: Double
     var scrollRequest: ScrollRequest?
+    var searchGeneration: Int
+    var flashedLine: FlashedLine?
 }
 
 /// The comparison itself: every line of both sides, aligned, with the changes marked. An
@@ -116,6 +118,19 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+    }
+
+    /// Tells the model which row is at the top, where searching starts.
+    @objc private func boundsChanged() {
+        guard let display, display.count > 0 else { return }
+        let top = tableView.row(at: NSPoint(x: 0, y: scrollView.contentView.bounds.minY + scrollView.contentInsets.top + 1))
+        guard top >= 0 else { return }
+        switch display[top] {
+        case .fold(let rows): model.firstVisibleRow = rows.lowerBound
+        case let line: model.firstVisibleRow = line.row ?? 0
+        }
     }
 
     func update(display: DiffDisplay, state: DiffListState) {
@@ -180,6 +195,28 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     private func scroll(to request: ScrollRequest) {
         guard let display, let line = display.line(ofRow: request.row, side: request.side) else { return }
         scroll(toLine: line)
+        if let match = request.match { reveal(match) }
+    }
+
+    /// Scrolls sideways when a match lies outside the visible part of its line.
+    private func reveal(_ match: SearchMatch) {
+        guard let display else { return }
+        let document = match.side == .left ? display.diff.left : display.diff.right
+        guard match.line < document.lines.count else { return }
+        let text = document.lines[match.line] as NSString
+        let attributes: [NSAttributedString.Key: Any] = [.font: metrics.font, .paragraphStyle: metrics.paragraph]
+        let start = NSAttributedString(string: text.substring(to: min(match.range.lowerBound, text.length)), attributes: attributes).size().width
+        let end = NSAttributedString(string: text.substring(to: min(match.range.upperBound, text.length)), attributes: attributes).size().width
+        let width = textAreaWidth()
+        if start < horizontalOffset {
+            horizontalOffset = max(0, start - metrics.characterWidth * 4)
+        } else if end > horizontalOffset + width {
+            horizontalOffset = end - width + metrics.characterWidth * 4
+        } else {
+            return
+        }
+        clampHorizontalOffset()
+        redrawVisibleRows()
     }
 
     /// Puts a line about a third down the visible area.
@@ -361,6 +398,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     var currentHunk: Int? { state?.currentHunk }
+    var flashedLine: FlashedLine? { state?.flashedLine }
 
     func segments(forRow row: Int, of diffRow: DiffRow) -> (left: [Segment], right: [Segment])? {
         guard diffRow.kind == .changed, let display else { return nil }

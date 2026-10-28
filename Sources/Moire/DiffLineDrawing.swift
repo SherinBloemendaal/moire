@@ -122,7 +122,18 @@ extension DiffListController {
                 shown.addAttribute(.backgroundColor, value: wordColor, range: NSRange(location: location, length: min(count, length - location)))
             }
         }
+        if let results = model.searchResults {
+            let current = model.currentMatch.map { results.ordered[$0] }
+            for match in results.matches(on: side, line: line) where match.range.lowerBound < length {
+                let range = NSRange(location: match.range.lowerBound, length: min(match.range.upperBound, length) - match.range.lowerBound)
+                shown.addAttribute(.backgroundColor, value: match == current ? Palette.currentMatch : Palette.searchMatch, range: range)
+            }
+        }
         NSGraphicsContext.saveGraphicsState()
+        if let flashedLine, flashedLine.side == side, flashedLine.line == line {
+            Palette.flash.setFill()
+            NSRect(x: frame.minX - 4, y: 0, width: frame.width + 4, height: frame.height).fill()
+        }
         frame.clip()
         shown.draw(at: NSPoint(x: frame.minX - horizontalOffset, y: metrics.textInset))
         NSGraphicsContext.restoreGraphicsState()

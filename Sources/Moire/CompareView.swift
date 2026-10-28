@@ -25,6 +25,9 @@ struct CompareView: View {
             }
         }
         .background(Theme.window)
+        .sheet(isPresented: $model.isGoToLineVisible) {
+            GoToLineView(model: model)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -71,14 +74,22 @@ struct CompareView: View {
             if diff.statistics.isIdentical, diff.rowCount > 0, model.onlyChanges {
                 IdenticalView(lineCount: diff.rowCount, showAll: { model.onlyChanges = false })
             } else {
-                HStack(spacing: 0) {
-                    DiffListView(model: model, display: display, state: DiffListState(
-                        generation: model.displayGeneration,
-                        currentHunk: model.currentHunk,
-                        fontSize: model.fontSize,
-                        scrollRequest: model.scrollRequest
-                    ))
-                    ChangeMap(model: model, diff: diff)
+                VStack(spacing: 0) {
+                    if model.isSearchVisible {
+                        FindBar(model: model)
+                        Rectangle().fill(Theme.paneBorder).frame(height: 1)
+                    }
+                    HStack(spacing: 0) {
+                        DiffListView(model: model, display: display, state: DiffListState(
+                            generation: model.displayGeneration,
+                            currentHunk: model.currentHunk,
+                            fontSize: model.fontSize,
+                            scrollRequest: model.scrollRequest,
+                            searchGeneration: model.searchGeneration,
+                            flashedLine: model.flashedLine
+                        ))
+                        ChangeMap(model: model, diff: diff)
+                    }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }

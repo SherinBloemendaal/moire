@@ -65,11 +65,42 @@ extension DiffSide {
 }
 
 /// Asks the diff list to scroll to a row. Every request has a new id, so asking for the same
-/// row twice scrolls twice.
+/// row twice scrolls twice. With a match, the list also scrolls sideways to show it.
 struct ScrollRequest: Equatable {
     var id: Int
     var row: Int
     var side: SideID?
+    var match: SearchMatch?
+}
+
+/// What a search found in the two documents of the current diff.
+struct SearchResults {
+    /// Per side, in line order, to find the matches of one line.
+    var left: [SearchMatch] = []
+    var right: [SearchMatch] = []
+    /// Both sides together in the order they appear in the list.
+    var ordered: [SearchMatch] = []
+    var rows: [Int] = []
+
+    func matches(on side: SideID, line: Int) -> ArraySlice<SearchMatch> {
+        let all = side == .left ? left : right
+        var low = 0
+        var high = all.count
+        while low < high {
+            let middle = (low + high) / 2
+            if all[middle].line < line { low = middle + 1 } else { high = middle }
+        }
+        var end = low
+        while end < all.count, all[end].line == line { end += 1 }
+        return all[low..<end]
+    }
+}
+
+/// A line that was jumped to, marked for a moment.
+struct FlashedLine: Equatable {
+    var id: Int
+    var side: SideID
+    var line: Int
 }
 
 @Observable
@@ -102,6 +133,7 @@ final class CompareModel {
             UserDefaults.standard.set(onlyChanges, forKey: "onlyChanges")
             expandedFolds = []
             rebuildDisplay()
+            if isSearchVisible, !searchQuery.isEmpty { scheduleSearch(delay: .zero, jump: false) }
         }
     }
 
@@ -123,6 +155,27 @@ final class CompareModel {
     private var expandedFolds: Set<Int> = []
     private var diffTask: Task<Void, Never>?
     private var loadTasks: [SideID: Task<Void, Never>] = [:]
+
+    var isSearchVisible = false
+    var searchQuery = "" {
+        didSet { if searchQuery != oldValue { scheduleSearch(delay: .milliseconds(120), jump: true) } }
+    }
+    var searchCaseSensitive = false {
+        didSet { if searchCaseSensitive != oldValue { scheduleSearch(delay: .zero, jump: true) } }
+    }
+    private(set) var searchResults: SearchResults?
+    private(set) var currentMatch: Int?
+    /// Goes up whenever matches or the current match change, so the list redraws.
+    private(set) var searchGeneration = 0
+    private(set) var isSearching = false
+    /// Goes up to ask the find field for focus.
+    private(set) var searchFocusRequest = 0
+    private var searchTask: Task<Void, Never>?
+    /// The first row the list shows, kept up to date by the list. Searching starts there.
+    @ObservationIgnored var firstVisibleRow = 0
+
+    var isGoToLineVisible = false
+    private(set) var flashedLine: FlashedLine?
 
     var isEmpty: Bool { left.isEmpty && right.isEmpty }
     var hasUnsavedChanges: Bool { left.isDirty || right.isDirty }
@@ -354,6 +407,7 @@ final class CompareModel {
             if let currentHunk, currentHunk >= result.hunks.count { self.currentHunk = result.hunks.isEmpty ? nil : result.hunks.count - 1 }
             expandedFolds = []
             rebuildDisplay()
+            if isSearchVisible, !searchQuery.isEmpty { scheduleSearch(delay: .zero, jump: false) }
         }
     }
 
@@ -362,6 +416,141 @@ final class CompareModel {
     private func rebuildDisplay() {
         display = diff.map { DiffDisplay(diff: $0, layout: layout, foldUnchanged: onlyChanges, expandedFolds: expandedFolds) }
         displayGeneration += 1
+    }
+
+    // MARK: Search
+
+    var searchMatchCount: Int { searchResults?.ordered.count ?? 0 }
+
+    func showSearch() {
+        isSearchVisible = true
+        searchFocusRequest += 1
+        if !searchQuery.isEmpty, searchResults == nil { scheduleSearch(delay: .zero, jump: true) }
+    }
+
+    func hideSearch() {
+        isSearchVisible = false
+        searchTask?.cancel()
+        searchResults = nil
+        currentMatch = nil
+        isSearching = false
+        searchGeneration += 1
+    }
+
+    func findNext() { moveMatch(by: 1) }
+    func findPrevious() { moveMatch(by: -1) }
+
+    private func moveMatch(by step: Int) {
+        guard let results = searchResults, !results.ordered.isEmpty else {
+            if !isSearchVisible { showSearch() }
+            return
+        }
+        let count = results.ordered.count
+        let next: Int
+        if let currentMatch {
+            next = (currentMatch + step + count) % count
+        } else {
+            let start = firstMatch(atOrAfterRow: firstVisibleRow, in: results)
+            next = step > 0 ? start : (start - 1 + count) % count
+        }
+        select(match: next)
+    }
+
+    private func select(match index: Int) {
+        guard let results = searchResults, results.ordered.indices.contains(index) else { return }
+        currentMatch = index
+        searchGeneration += 1
+        let match = results.ordered[index]
+        reveal(row: results.rows[index])
+        scrollRequest = ScrollRequest(id: (scrollRequest?.id ?? 0) + 1, row: results.rows[index], side: match.side, match: match)
+    }
+
+    private func firstMatch(atOrAfterRow row: Int, in results: SearchResults) -> Int {
+        var low = 0
+        var high = results.rows.count
+        while low < high {
+            let middle = (low + high) / 2
+            if results.rows[middle] < row { low = middle + 1 } else { high = middle }
+        }
+        return low < results.rows.count ? low : 0
+    }
+
+    /// Searches the documents of the diff on screen. `jump` moves to the first match from the
+    /// top of the list, as typing in the find field does.
+    private func scheduleSearch(delay: Duration, jump: Bool) {
+        searchTask?.cancel()
+        guard isSearchVisible, !searchQuery.isEmpty, let diff else {
+            searchResults = nil
+            currentMatch = nil
+            isSearching = false
+            searchGeneration += 1
+            return
+        }
+        let query = searchQuery
+        let caseSensitive = searchCaseSensitive
+        let previousRow = currentMatch.flatMap { searchResults?.rows[$0] }
+        isSearching = true
+        searchTask = Task {
+            if delay > .zero {
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+            }
+            let results = await Task.detached(priority: .userInitiated) {
+                Self.search(query, in: diff, caseSensitive: caseSensitive)
+            }.value
+            guard !Task.isCancelled else { return }
+            searchResults = results
+            isSearching = false
+            searchGeneration += 1
+            if results.ordered.isEmpty {
+                currentMatch = nil
+            } else if jump {
+                select(match: firstMatch(atOrAfterRow: firstVisibleRow, in: results))
+            } else {
+                currentMatch = previousRow.map { firstMatch(atOrAfterRow: $0, in: results) }
+            }
+        }
+    }
+
+    nonisolated private static func search(_ query: String, in diff: LineDiff, caseSensitive: Bool) -> SearchResults {
+        var results = SearchResults()
+        results.left = TextSearch.matches(of: query, in: diff.left.lines, side: .left, caseSensitive: caseSensitive)
+        results.right = TextSearch.matches(of: query, in: diff.right.lines, side: .right, caseSensitive: caseSensitive)
+        let leftRows = results.left.map { diff.row(ofLine: $0.line, on: .left) }
+        let rightRows = results.right.map { diff.row(ofLine: $0.line, on: .right) }
+        results.ordered.reserveCapacity(leftRows.count + rightRows.count)
+        results.rows.reserveCapacity(leftRows.count + rightRows.count)
+        var l = 0
+        var r = 0
+        // Each side is already in row order; on one row the left side comes first.
+        while l < leftRows.count || r < rightRows.count {
+            if r == rightRows.count || (l < leftRows.count && leftRows[l] <= rightRows[r]) {
+                results.ordered.append(results.left[l])
+                results.rows.append(leftRows[l])
+                l += 1
+            } else {
+                results.ordered.append(results.right[r])
+                results.rows.append(rightRows[r])
+                r += 1
+            }
+        }
+        return results
+    }
+
+    // MARK: Go to line
+
+    func goToLine(_ number: Int, on side: SideID) {
+        guard let diff else { return }
+        let count = side == .left ? diff.left.lines.count : diff.right.lines.count
+        guard count > 0 else { return }
+        let line = min(max(number, 1), count) - 1
+        scroll(toRow: diff.row(ofLine: line, on: side), side: side)
+        let flash = FlashedLine(id: (flashedLine?.id ?? 0) + 1, side: side, line: line)
+        flashedLine = flash
+        Task {
+            try? await Task.sleep(for: .seconds(1.6))
+            if flashedLine == flash { flashedLine = nil }
+        }
     }
 
     /// Unfolds the fold that hides `row`, if any.

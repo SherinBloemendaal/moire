@@ -92,6 +92,7 @@ struct MoireCommands: Commands {
 
     private var compare: CompareModel { state.compare }
     private var isText: Bool { state.mode == .text }
+    private var canSearch: Bool { isText && !compare.isEditing && compare.display != nil }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -117,6 +118,21 @@ struct MoireCommands: Commands {
             Button("Reload from Disk") { compare.reload() }
                 .keyboardShortcut("r")
                 .disabled(!compare.hasFiles)
+        }
+        CommandGroup(replacing: .textEditing) {
+            Button("Find…") { compare.showSearch() }
+                .keyboardShortcut("f")
+                .disabled(!canSearch)
+            Button("Find Next") { compare.findNext() }
+                .keyboardShortcut("g")
+                .disabled(!canSearch)
+            Button("Find Previous") { compare.findPrevious() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!canSearch)
+            Divider()
+            Button("Go to Line…") { compare.isGoToLineVisible = true }
+                .keyboardShortcut("l")
+                .disabled(!canSearch)
         }
         CommandMenu("Compare") {
             Button("Next Change") { compare.goToNextChange() }
