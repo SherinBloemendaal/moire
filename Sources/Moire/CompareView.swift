@@ -82,6 +82,7 @@ struct CompareView: View {
                     HStack(spacing: 0) {
                         DiffListView(model: model, display: display, state: DiffListState(
                             generation: model.displayGeneration,
+                            replacements: model.replacements,
                             currentHunk: model.currentHunk,
                             fontSize: model.fontSize,
                             scrollRequest: model.scrollRequest,

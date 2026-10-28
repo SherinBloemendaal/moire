@@ -6,6 +6,8 @@ import SwiftUI
 /// `generation` reloads the list.
 struct DiffListState: Equatable {
     var generation: Int
+    /// Goes up when a side is replaced as a whole, which ends editing a line.
+    var replacements: Int
     var currentHunk: Int?
     var fontSize: Double
     var scrollRequest: ScrollRequest?
@@ -89,6 +91,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var widestLine = 0
     private var metricsLineCount = 0
     private var isHighlighting = false
+    var editor: InlineEditor?
 
     init(model: CompareModel) {
         self.model = model
@@ -136,6 +139,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func update(display: DiffDisplay, state: DiffListState) {
         let previous = self.state
+        let layout = self.display?.layout
         self.display = display
         self.state = state
         let lineCount = max(display.diff.left.lines.count, display.diff.right.lines.count)
@@ -146,11 +150,15 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
             metrics = DiffMetrics(fontSize: state.fontSize, lineCount: lineCount)
             tableView.rowHeight = metrics.lineHeight
         }
+        if metricsChanged || previous?.replacements != state.replacements || layout != display.layout {
+            endEditing()
+        }
         if previous?.generation != state.generation || metricsChanged {
             segmentCache = [:]
             widestLine = Self.widestLine(display.diff)
             clampHorizontalOffset()
             tableView.reloadData()
+            syncEditor()
         } else if previous != state {
             redrawVisibleRows()
         }
@@ -309,6 +317,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         horizontalOffset -= delta
         clampHorizontalOffset()
         redrawVisibleRows()
+        editor?.scroll(toOffset: horizontalOffset)
     }
 
     private func clampHorizontalOffset() {
@@ -318,6 +327,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func tableResized() {
         clampHorizontalOffset()
+        positionEditor()
     }
 
     // MARK: Mouse
@@ -363,10 +373,16 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     func mouseDown(at point: NSPoint, line: Int, event: NSEvent) {
         switch target(at: point, line: line) {
         case .mergeButton(let hunk, let toRight):
+            endEditing()
             model.copy(hunk: hunk, toRight: toRight)
         case .fold(let rows):
+            endEditing()
             model.expand(fold: rows)
-        case .text, .row:
+        case .text(let side, let number):
+            if let hunk = hunk(atLine: line) { model.currentHunk = hunk }
+            beginEditing(side: side, line: number, event: event)
+        case .row:
+            endEditing()
             if let hunk = hunk(atLine: line) { model.currentHunk = hunk }
         }
     }
@@ -481,6 +497,11 @@ final class DiffTableView: NSTableView {
         controller?.mouseExited()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { controller?.model.undoManager = window.undoManager }
+    }
+
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         controller?.tableResized()
@@ -509,6 +530,12 @@ final class DiffLineView: NSView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         controller?.menu(forLine: index)
+    }
+
+    override func resetCursorRects() {
+        for frame in controller?.textFrames(forLine: index) ?? [] {
+            addCursorRect(frame, cursor: .iBeam)
+        }
     }
 }
 

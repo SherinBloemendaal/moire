@@ -98,6 +98,7 @@ extension DiffListController {
         guard let display, frame.width > 0 else { return }
         let document = side == .left ? display.diff.left : display.diff.right
         guard line < document.lines.count else { return }
+        if let editor, editor.side == side, editor.line == line { return }
         let text = document.lines[line]
         // Only what can be seen is laid out: a column is at least one UTF-16 unit, and the
         // slack covers characters that take up no room of their own.

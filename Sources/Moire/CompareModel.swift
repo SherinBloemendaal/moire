@@ -189,6 +189,16 @@ final class CompareModel {
     @ObservationIgnored private(set) var highlighters: [SideID: SyntaxHighlightCache] = [:]
     /// True while a side changes by an edit rather than being replaced.
     @ObservationIgnored private var replacedByEdit = false
+    /// The revisions of the sides that `diff` was worked out from.
+    @ObservationIgnored private var diffRevisions = (0, 0)
+
+    /// Goes up when a side is replaced as a whole.
+    private(set) var replacements = 0
+    /// The window's undo manager, set by the diff list.
+    @ObservationIgnored weak var undoManager: UndoManager?
+    /// The line being typed in: its first change is one undo step, the rest of the typing joins it.
+    @ObservationIgnored private var typingSession: (side: SideID, line: Int)?
+    @ObservationIgnored private var isTyping = false
 
     var isEmpty: Bool { left.isEmpty && right.isEmpty }
     var hasUnsavedChanges: Bool { left.isDirty || right.isDirty }
@@ -236,6 +246,7 @@ final class CompareModel {
             isLoading = !loadTasks.isEmpty
             switch result {
             case .success(let file):
+                forgetEdits()
                 self[side] = Side(file: file)
                 if hasBinarySide { isEditing = false }
             case .failure(let error):
@@ -255,6 +266,7 @@ final class CompareModel {
     /// Replaces the whole text of a side, from the plain text editor.
     func setText(_ text: String, on side: SideID) {
         guard !self[side].isBinary else { return }
+        forgetEdits()
         setDocument(TextDocument(text), on: side)
     }
 
@@ -268,15 +280,18 @@ final class CompareModel {
 
     func pasteClipboard(into side: SideID) {
         guard canReplace(side), let text = NSPasteboard.general.string(forType: .string) else { return }
+        forgetEdits()
         self[side] = Side(content: .text(TextDocument(text)))
     }
 
     func clear(_ side: SideID) {
         guard canReplace(side) else { return }
+        forgetEdits()
         self[side] = Side()
     }
 
     func swapSides() {
+        forgetEdits()
         let previous = left
         left = right
         right = previous
@@ -371,11 +386,18 @@ final class CompareModel {
 
     /// Copies a change over to the other side. `toRight` copies the left version to the right.
     func copy(hunk index: Int, toRight: Bool) {
-        guard let diff, diff.hunks.indices.contains(index) else { return }
-        let target: SideID = toRight ? .right : .left
-        setDocument(diff.copying(hunk: index, toRight: toRight), on: target)
+        guard let diff = currentDiff(), diff.hunks.indices.contains(index) else { return }
+        perform(diff.edit(copyingHunk: index, toRight: toRight), actionName: toRight ? "Copy Change to Right" : "Copy Change to Left")
         // The next change now sits where this one was.
-        currentHunk = index < hunkCount - 1 ? index : nil
+        currentHunk = index < diff.hunks.count - 1 ? index : nil
+    }
+
+    /// The diff of the documents as they are now. Right after typing the shown diff can be a
+    /// moment behind; merging must not work on old line numbers.
+    private func currentDiff() -> LineDiff? {
+        guard let diff, !hasBinarySide else { return nil }
+        if diffRevisions == (left.revision, right.revision) { return diff }
+        return LineDiff(left: left.document, right: right.document, options: options)
     }
 
     func copyCurrentChange(toRight: Bool) {
@@ -388,6 +410,64 @@ final class CompareModel {
         rebuildDisplay()
     }
 
+    // MARK: Editing
+
+    /// Changes lines of one side as one undoable step.
+    func perform(_ edit: LineEdit, actionName: String, typing: Bool = false) {
+        guard !self[edit.side].isBinary else { return }
+        let document = self[edit.side].document
+        guard edit.range.upperBound <= document.lines.count else { return }
+        let inverse = edit.inverse(in: document)
+        isTyping = typing
+        setDocument(document.applying(edit), on: edit.side)
+        isTyping = false
+        registerUndo(inverse, actionName: actionName)
+    }
+
+    /// Typing in a line. The first change of a line registers one undo step that brings the
+    /// whole line back; the keys after it join that step.
+    func setLine(_ text: String, line: Int, on side: SideID) {
+        let document = self[side].document
+        guard line < document.lines.count, document.lines[line] != text else { return }
+        let edit = LineEdit(side: side, range: line..<(line + 1), lines: [text])
+        if let session = typingSession, session.side == side, session.line == line {
+            isTyping = true
+            setDocument(document.applying(edit), on: side)
+            isTyping = false
+        } else {
+            typingSession = (side, line)
+            perform(edit, actionName: "Typing", typing: true)
+        }
+    }
+
+    /// Replaces one line by several, as Return, joining lines or pasting do.
+    func replaceLines(_ range: Range<Int>, with lines: [String], on side: SideID) {
+        endTypingSession()
+        perform(LineEdit(side: side, range: range, lines: Lines(lines)), actionName: "Typing")
+    }
+
+    func endTypingSession() {
+        typingSession = nil
+    }
+
+    private func registerUndo(_ inverse: LineEdit, actionName: String) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated {
+                model.endTypingSession()
+                model.perform(inverse, actionName: actionName)
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    /// Undo steps refer to line numbers, so they end when a side is replaced as a whole.
+    private func forgetEdits() {
+        typingSession = nil
+        undoManager?.removeAllActions(withTarget: self)
+        replacements += 1
+    }
+
     // MARK: Diffing
 
     private func sidesChanged(_ side: SideID, oldValue: Side) {
@@ -396,7 +476,7 @@ final class CompareModel {
         // A side read from disk or pasted gets new colors; an edit keeps what still holds.
         if isReplacement(of: oldValue, by: newValue) { resetHighlighter(side) }
         // Typing recomputes after a short pause; opening or merging recomputes right away.
-        scheduleDiff(delay: isEditing ? .milliseconds(150) : .zero)
+        scheduleDiff(delay: isEditing || isTyping ? .milliseconds(150) : .zero)
     }
 
     private func scheduleDiff(delay: Duration) {
@@ -409,6 +489,7 @@ final class CompareModel {
         }
         let leftDocument = left.document
         let rightDocument = right.document
+        let revisions = (left.revision, right.revision)
         let options = options
         isComputing = true
         diffTask = Task {
@@ -421,6 +502,7 @@ final class CompareModel {
             }.value
             guard !Task.isCancelled else { return }
             diff = result
+            diffRevisions = revisions
             isComputing = false
             highlighters[.left]?.update(to: result.left)
             highlighters[.right]?.update(to: result.right)
