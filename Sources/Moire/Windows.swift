@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 
 /// What a new window should show. Each window (or tab) has its own comparison.
@@ -13,6 +14,7 @@ struct WindowRequest: Codable, Hashable {
 @Observable
 final class Windows {
     static let shared = Windows()
+    private static let log = Logger(subsystem: "io.github.sherinbloemendaal.moire", category: "windows")
 
     private struct Entry {
         weak var state: AppState?
@@ -103,7 +105,9 @@ final class Windows {
     /// Files from Finder or the Dock: into the front window when it shows nothing yet, otherwise
     /// into a new window, so nothing on screen is replaced unasked.
     func open(_ urls: [URL]) {
+        Self.log.info("Opening \(urls.count, privacy: .public) items from outside the app")
         guard let frontmost else {
+            // At launch the first window is still on its way; the files wait for it.
             pending.append { $0.open(urls) }
             return
         }
@@ -149,6 +153,7 @@ struct WindowRoot: View {
                 if let urls = request?.urls, !urls.isEmpty { state.open(urls) }
             }
             .onDisappear { Windows.shared.unregister(state) }
+
     }
 }
 

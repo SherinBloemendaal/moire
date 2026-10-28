@@ -11,6 +11,9 @@ struct MoireApp: App {
             WindowRoot(request: request)
         }
         .defaultSize(width: 1240, height: 780)
+        // Files from Finder, the Dock or `open` go through the app delegate, which decides whether
+        // they need a new window; SwiftUI must not make one of its own for them.
+        .handlesExternalEvents(matching: [])
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             MoireCommands()
@@ -146,11 +149,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // `open -a Moire --args left.txt right.txt`, or a difftool configured to run the binary.
-        let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
+        // `open -a Moire --args left.txt right.txt`, or a difftool running the binary. These
+        // arrive only as arguments; files from Finder and `open` come to `application(_:open:)`.
+        let paths = arguments.filter { !$0.hasPrefix("-") }
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
-        if !urls.isEmpty { Windows.shared.withFrontmost { $0.open(urls) } }
+        if !urls.isEmpty { Windows.shared.open(urls) }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Windows.shared.open(urls)
     }
 
     /// `Moire --merge BASE LOCAL REMOTE MERGED`, the way `git mergetool` passes the files.
@@ -165,10 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.mode = .merge
         }
         NSApp.activate()
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        Windows.shared.open(urls)
     }
 
 
