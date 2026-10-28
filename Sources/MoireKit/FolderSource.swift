@@ -96,6 +96,8 @@ public struct LocalSource: FolderSource {
 final class LocalFile: ReadableFile {
     let descriptor: Int32
     let size: Int64
+    /// Whether reads bypass the file cache: set for files of `uncachedFrom` bytes or more.
+    let bypassesCache: Bool
 
     /// Above this size a read bypasses the file cache, so one huge file does not push out the
     /// cached contents of everything else.
@@ -111,9 +113,7 @@ final class LocalFile: ReadableFile {
             throw error
         }
         size = Int64(info.st_size)
-        if size >= Self.uncachedFrom {
-            _ = fcntl(descriptor, F_NOCACHE, 1)
-        }
+        bypassesCache = size >= Self.uncachedFrom && fcntl(descriptor, F_NOCACHE, 1) != -1
     }
 
     deinit { Darwin.close(descriptor) }
