@@ -12,6 +12,11 @@ final class LineBuffer: @unchecked Sendable {
     let starts: [Int]
     let lineEnding: TextDocument.LineEnding
     let endsWithLineBreak: Bool
+    /// Whether a `\r` on its own ends a line. Only in a file that mostly breaks lines that way;
+    /// elsewhere it is part of the line, so it is kept as it was.
+    let breaksOnCR: Bool
+    /// Whether some line ends with another break than `lineEnding`.
+    let hasMixedBreaks: Bool
 
     var lineCount: Int { starts.count - 1 }
 
@@ -24,6 +29,8 @@ final class LineBuffer: @unchecked Sendable {
         starts = split.starts
         lineEnding = split.lineEnding
         endsWithLineBreak = split.endsWithLineBreak
+        breaksOnCR = split.lineEnding == .cr
+        hasMixedBreaks = split.hasMixedBreaks
     }
 
     /// Copies valid UTF-8 bytes.
@@ -42,10 +49,53 @@ final class LineBuffer: @unchecked Sendable {
     func bytes(of line: Int) -> UnsafeBufferPointer<UInt8> {
         let start = starts[line]
         var end = starts[line + 1]
-        // A line never contains a break, so whatever break bytes it ends with are its terminator.
-        if end > start, text[end - 1] == 0x0A { end -= 1 }
-        if end > start, text[end - 1] == 0x0D { end -= 1 }
+        if end > start, text[end - 1] == 0x0A {
+            end -= 1
+            if end > start, text[end - 1] == 0x0D { end -= 1 }
+        } else if breaksOnCR, end > start, text[end - 1] == 0x0D {
+            end -= 1
+        }
         return UnsafeBufferPointer(rebasing: text[start..<end])
+    }
+
+    /// The line break a line was read with, nil for a last line without one.
+    func lineBreak(of line: Int) -> TextDocument.LineEnding? {
+        let start = starts[line]
+        let end = starts[line + 1]
+        guard end > start else { return nil }
+        if text[end - 1] == 0x0A { return end - 1 > start && text[end - 2] == 0x0D ? .crlf : .lf }
+        return breaksOnCR && text[end - 1] == 0x0D ? .cr : nil
+    }
+
+    /// Appends lines `range` to `output`. With `keepingBreaks`, a line keeps the break it was read
+    /// with, unless that is this text's usual one, which becomes `ending`; otherwise every line
+    /// gets `ending`. The last line of the range gets no break when `breakAfterLast` is false.
+    func append(_ range: Range<Int>, to output: inout [UInt8], ending: TextDocument.LineEnding, keepingBreaks: Bool, breakAfterLast: Bool) {
+        guard !range.isEmpty else { return }
+        let endingBytes = Array(ending.rawValue.utf8)
+        let last = range.upperBound - 1
+        if keepingBreaks, lineEnding == ending {
+            // Every line before the last has its own break, so they are copied as they are.
+            output.append(contentsOf: UnsafeBufferPointer(rebasing: text[starts[range.lowerBound]..<starts[last]]))
+        } else {
+            for line in range.lowerBound..<last {
+                output.append(contentsOf: bytes(of: line))
+                appendBreak(of: line, to: &output, ending: ending, endingBytes: endingBytes, keepingBreaks: keepingBreaks)
+            }
+        }
+        output.append(contentsOf: bytes(of: last))
+        if breakAfterLast {
+            appendBreak(of: last, to: &output, ending: ending, endingBytes: endingBytes, keepingBreaks: keepingBreaks)
+        }
+    }
+
+    @inline(__always)
+    private func appendBreak(of line: Int, to output: inout [UInt8], ending: TextDocument.LineEnding, endingBytes: [UInt8], keepingBreaks: Bool) {
+        guard keepingBreaks, let own = lineBreak(of: line), own != lineEnding else {
+            output.append(contentsOf: endingBytes)
+            return
+        }
+        output.append(contentsOf: own.rawValue.utf8)
     }
 
     func string(of line: Int) -> String {
@@ -56,38 +106,56 @@ final class LineBuffer: @unchecked Sendable {
         var starts: [Int]
         var lineEnding: TextDocument.LineEnding
         var endsWithLineBreak: Bool
+        var hasMixedBreaks: Bool
     }
 
-    /// Splits on `\r\n`, `\n` and `\r`, on several cores for big texts.
+    /// Splits on `\r\n` and `\n`, on several cores for big texts. A `\r` on its own also ends
+    /// a line when it is the most common break, as in old Mac files.
     private static func split(_ text: UnsafeBufferPointer<UInt8>) -> Split {
         let chunkSize = 1 << 22
         let chunkCount = max(1, (text.count + chunkSize - 1) / chunkSize)
         var parts = [[Int]](repeating: [], count: chunkCount)
+        // Where a lone `\r` would end a line, kept apart until it is known whether it does.
+        var crParts = [[Int]](repeating: [], count: chunkCount)
         var counts = [(lf: Int, crlf: Int, cr: Int)](repeating: (0, 0, 0), count: chunkCount)
         parts.withUnsafeMutableBufferPointer { parts in
-            counts.withUnsafeMutableBufferPointer { counts in
-                Parallel.forEach(chunkCount) { chunk in
-                    let range = (chunk * chunkSize)..<min(text.count, (chunk + 1) * chunkSize)
-                    var ends: [Int] = []
-                    ends.reserveCapacity(range.count / 24)
-                    var count = (lf: 0, crlf: 0, cr: 0)
-                    scanBreaks(text, range: range) { position, byte in
-                        if byte == 0x0A {
-                            if position > 0, text[position - 1] == 0x0D { count.crlf += 1 } else { count.lf += 1 }
-                            ends.append(position + 1)
-                        } else if position + 1 < text.count, text[position + 1] == 0x0A {
-                            // The "\n" right after closes this "\r\n".
-                        } else {
-                            count.cr += 1
-                            ends.append(position + 1)
+            crParts.withUnsafeMutableBufferPointer { crParts in
+                counts.withUnsafeMutableBufferPointer { counts in
+                    Parallel.forEach(chunkCount) { chunk in
+                        let range = (chunk * chunkSize)..<min(text.count, (chunk + 1) * chunkSize)
+                        var ends: [Int] = []
+                        ends.reserveCapacity(range.count / 24)
+                        var crEnds: [Int] = []
+                        var count = (lf: 0, crlf: 0, cr: 0)
+                        scanBreaks(text, range: range) { position, byte in
+                            if byte == 0x0A {
+                                if position > 0, text[position - 1] == 0x0D { count.crlf += 1 } else { count.lf += 1 }
+                                ends.append(position + 1)
+                            } else if position + 1 < text.count, text[position + 1] == 0x0A {
+                                // The "\n" right after closes this "\r\n".
+                            } else {
+                                count.cr += 1
+                                crEnds.append(position + 1)
+                            }
                         }
+                        parts[chunk] = ends
+                        crParts[chunk] = crEnds
+                        counts[chunk] = count
                     }
-                    parts[chunk] = ends
-                    counts[chunk] = count
                 }
             }
         }
 
+        let total = counts.reduce((lf: 0, crlf: 0, cr: 0)) { ($0.lf + $1.lf, $0.crlf + $1.crlf, $0.cr + $1.cr) }
+        var lineEnding = TextDocument.LineEnding.lf
+        if total.crlf > total.lf, total.crlf >= total.cr { lineEnding = .crlf }
+        if total.cr > total.lf, total.cr > total.crlf { lineEnding = .cr }
+
+        if lineEnding == .cr {
+            for chunk in 0..<chunkCount where !crParts[chunk].isEmpty {
+                parts[chunk] = merged(parts[chunk], crParts[chunk])
+            }
+        }
         var starts: [Int] = [0]
         starts.reserveCapacity(parts.reduce(1) { $0 + $1.count } + 1)
         for part in parts { starts.append(contentsOf: part) }
@@ -96,12 +164,27 @@ final class LineBuffer: @unchecked Sendable {
             starts.append(text.count)
         }
         if text.count == 0 { starts = [0] }
+        let kinds = [total.lf, total.crlf, lineEnding == .cr ? total.cr : 0].count { $0 > 0 }
+        return Split(starts: starts, lineEnding: lineEnding, endsWithLineBreak: endsWithLineBreak, hasMixedBreaks: kinds > 1)
+    }
 
-        let total = counts.reduce((lf: 0, crlf: 0, cr: 0)) { ($0.lf + $1.lf, $0.crlf + $1.crlf, $0.cr + $1.cr) }
-        var lineEnding = TextDocument.LineEnding.lf
-        if total.crlf > total.lf, total.crlf >= total.cr { lineEnding = .crlf }
-        if total.cr > total.lf, total.cr > total.crlf { lineEnding = .cr }
-        return Split(starts: starts, lineEnding: lineEnding, endsWithLineBreak: endsWithLineBreak)
+    /// Two sorted lists of positions as one sorted list.
+    private static func merged(_ a: [Int], _ b: [Int]) -> [Int] {
+        var result: [Int] = []
+        result.reserveCapacity(a.count + b.count)
+        var i = 0, j = 0
+        while i < a.count, j < b.count {
+            if a[i] < b[j] {
+                result.append(a[i])
+                i += 1
+            } else {
+                result.append(b[j])
+                j += 1
+            }
+        }
+        result.append(contentsOf: a[i...])
+        result.append(contentsOf: b[j...])
+        return result
     }
 
     /// Calls `found` for every `\n` and `\r` in `range`, skipping eight bytes at a time where
