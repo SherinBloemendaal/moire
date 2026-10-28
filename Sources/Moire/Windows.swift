@@ -39,6 +39,8 @@ final class Windows {
             MainActor.assumeIsolated {
                 guard let window, let state = Windows.shared.state(for: window) else { return }
                 Windows.shared.focus(state)
+                // SwiftUI may set its own delegate again; the guard goes back in front of it.
+                CloseGuard.install(on: window, state: state)
             }
         }
     }
@@ -126,6 +128,7 @@ final class CloseGuard: NSObject, NSWindowDelegate {
     /// Read from `responds(to:)`, which AppKit may call from any thread; set once, before use.
     nonisolated(unsafe) private weak var original: NSWindowDelegate?
     private weak var state: AppState?
+    private static let log = Logger(subsystem: "io.github.sherinbloemendaal.moire", category: "windows")
     /// The window keeps its delegate weakly, so the guards are kept here.
     private static var guards: [ObjectIdentifier: CloseGuard] = [:]
 
@@ -136,10 +139,14 @@ final class CloseGuard: NSObject, NSWindowDelegate {
         guardian.state = state
         guards[ObjectIdentifier(window)] = guardian
         window.delegate = guardian
+        log.debug("Close guard in front of \(String(describing: guardian.original.map { type(of: $0) }), privacy: .public)")
     }
 
+    /// Asks about unsaved work; replaced in tests, where an alert cannot be answered.
+    static var confirm: (AppState) -> Bool = { AppDelegate.confirmQuit($0, closing: true) }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if let state, !AppDelegate.confirmQuit(state, closing: true) { return false }
+        if let state, !Self.confirm(state) { return false }
         return original?.windowShouldClose?(sender) ?? true
     }
 
