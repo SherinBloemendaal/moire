@@ -33,6 +33,39 @@ jobs:
       - name: Build DMG
         run: scripts/make-dmg.sh
 
+  benchmark:
+    name: Benchmark (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build
+        run: swift build -c release --product moire-bench
+
+      # Compared with benchmarks/baseline-ci.json once that exists. GitHub's runners vary in
+      # speed, so only a slowdown of more than 50% fails the build.
+      - name: Run
+        run: |
+          set -euo pipefail
+          args=(run --files 20000 --large --only engine --json benchmark.json)
+          if [ -f benchmarks/baseline-ci.json ]; then
+            args+=(--baseline benchmarks/baseline-ci.json --max-regression 0.5)
+          fi
+          .build/release/moire-bench "${args[@]}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark
+          path: benchmark.json
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

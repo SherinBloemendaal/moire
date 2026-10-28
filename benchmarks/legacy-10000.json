@@ -1,0 +1,18 @@
+{
+  "cores" : 12,
+  "date" : "2026-10-28T00:15:12Z",
+  "machine" : "Apple M2 Max",
+  "memoryGB" : 64,
+  "scenarios" : {
+    "legacy.content\/tree-10000" : {
+      "bytes" : 47415815,
+      "files" : 10000,
+      "filesPerSecond" : 571.2440324148854,
+      "megabytesPerSecond" : 2.583122383197614,
+      "runs" : [
+        17.505653333
+      ],
+      "seconds" : 17.505653333
+    }
+  }
+}

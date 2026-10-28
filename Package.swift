@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "Moire", targets: ["Moire"]),
         .library(name: "MoireKit", targets: ["MoireKit"]),
+        .executable(name: "moire-bench", targets: ["MoireBench"]),
     ],
     targets: [
         .target(name: "MoireKit"),
@@ -15,6 +16,7 @@ let package = Package(
             dependencies: ["MoireKit"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        .executableTarget(name: "MoireBench", dependencies: ["MoireKit"]),
         .testTarget(name: "MoireKitTests", dependencies: ["MoireKit"]),
     ]
 )

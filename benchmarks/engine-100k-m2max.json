@@ -1,0 +1,92 @@
+{
+  "cores" : 12,
+  "date" : "2026-10-28T00:23:52Z",
+  "machine" : "Apple M2 Max",
+  "memoryGB" : 64,
+  "scenarios" : {
+    "engine.binary\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 286.77283080505146,
+      "megabytesPerSecond" : 18353.461171523293,
+      "runs" : [
+        0.055793291,
+        0.056774709,
+        0.053645417
+      ],
+      "seconds" : 0.055793291
+    },
+    "engine.binary\/tree-100000" : {
+      "bytes" : 465639737,
+      "files" : 100000,
+      "filesPerSecond" : 40853.77581955517,
+      "megabytesPerSecond" : 181.41881397318485,
+      "runs" : [
+        2.553736167,
+        2.447754167,
+        2.413263083
+      ],
+      "seconds" : 2.447754167
+    },
+    "engine.lines\/tree-100000" : {
+      "bytes" : 465639737,
+      "files" : 100000,
+      "filesPerSecond" : 28389.84173340899,
+      "megabytesPerSecond" : 126.07038915840327,
+      "runs" : [
+        2.584368542,
+        3.522386667,
+        4.493588
+      ],
+      "seconds" : 3.522386667
+    },
+    "engine.metadata\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 57579.84705353126,
+      "megabytesPerSecond" : 3685110.2114260006,
+      "runs" : [
+        0.000354792,
+        0.000275792,
+        0.000277875
+      ],
+      "seconds" : 0.000277875
+    },
+    "engine.metadata\/tree-100000" : {
+      "bytes" : 465639737,
+      "files" : 100000,
+      "filesPerSecond" : 339201.2791524462,
+      "megabytesPerSecond" : 1506.286567827307,
+      "runs" : [
+        0.306657958,
+        0.294810209,
+        0.294134833
+      ],
+      "seconds" : 0.294810209
+    },
+    "engine.quick\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 27789.839339991315,
+      "megabytesPerSecond" : 1778549.7177594441,
+      "runs" : [
+        0.000687959,
+        0.000569292,
+        0.00057575
+      ],
+      "seconds" : 0.00057575
+    },
+    "engine.quick\/tree-100000" : {
+      "bytes" : 465639737,
+      "files" : 100000,
+      "filesPerSecond" : 39852.890356299235,
+      "megabytesPerSecond" : 176.97419532963764,
+      "runs" : [
+        2.509228292,
+        2.47671525,
+        2.545241667
+      ],
+      "seconds" : 2.509228292
+    }
+  }
+}
