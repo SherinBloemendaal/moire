@@ -197,6 +197,11 @@ final class CompareModel {
     @ObservationIgnored private var diskSignatures: [SideID: FileSignature] = [:]
     @ObservationIgnored private var isAskingToReload: Set<SideID> = []
 
+    /// Lines the user put on one row; the diff is worked out around them.
+    private(set) var anchors: [LineAnchor] = []
+    /// A line marked on each side, to be aligned once both are marked.
+    private(set) var alignmentMarks: [SideID: Int] = [:]
+
     /// Goes up when a side is replaced as a whole.
     private(set) var replacements = 0
     /// The window's undo manager, set by the diff list.
@@ -302,7 +307,11 @@ final class CompareModel {
     }
 
     func swapSides() {
+        let swappedAnchors = anchors.map { LineAnchor(left: $0.right, right: $0.left) }
+        let swappedMarks = [SideID.left: alignmentMarks[.right], .right: alignmentMarks[.left]].compactMapValues { $0 }
         forgetEdits()
+        anchors = swappedAnchors
+        alignmentMarks = swappedMarks
         diskSignatures = [.left: diskSignatures[.right], .right: diskSignatures[.left]].compactMapValues { $0 }
         let previous = left
         left = right
@@ -371,6 +380,33 @@ final class CompareModel {
             errorMessage = "Could not save \(destination.lastPathComponent): \(error.localizedDescription)"
             return false
         }
+    }
+
+    // MARK: Aligning lines by hand
+
+    var canAlign: Bool { alignmentMarks[.left] != nil && alignmentMarks[.right] != nil }
+
+    /// Marks a line to be aligned; marking the same line again takes the mark away.
+    func toggleAlignmentMark(side: SideID, line: Int) {
+        alignmentMarks[side] = alignmentMarks[side] == line ? nil : line
+    }
+
+    func alignMarkedLines() {
+        guard let leftLine = alignmentMarks[.left], let rightLine = alignmentMarks[.right] else { return }
+        anchors = LineAnchor.adding(LineAnchor(left: leftLine, right: rightLine), to: anchors)
+        alignmentMarks = [:]
+        scheduleDiff(delay: .zero)
+    }
+
+    func removeAlignment(_ anchor: LineAnchor) {
+        anchors.removeAll { $0 == anchor }
+        scheduleDiff(delay: .zero)
+    }
+
+    func clearAlignments() {
+        anchors = []
+        alignmentMarks = [:]
+        scheduleDiff(delay: .zero)
     }
 
     // MARK: Changes on disk
@@ -447,8 +483,10 @@ final class CompareModel {
     /// moment behind; merging must not work on old line numbers.
     private func currentDiff() -> LineDiff? {
         guard let diff, !hasBinarySide else { return nil }
-        if diffRevisions == (left.revision, right.revision) { return diff }
-        return LineDiff(left: left.document, right: right.document, options: options)
+        if diffRevisions == (left.revision, right.revision), diff.anchors == LineAnchor.normalized(anchors, leftCount: left.document.lines.count, rightCount: right.document.lines.count) {
+            return diff
+        }
+        return LineDiff(left: left.document, right: right.document, options: options, anchors: anchors)
     }
 
     /// Copies one line of a change: the left version of that row goes right, or the other way.
@@ -475,6 +513,9 @@ final class CompareModel {
         let document = self[edit.side].document
         guard edit.range.upperBound <= document.lines.count else { return }
         let inverse = edit.inverse(in: document)
+        // Before the document changes, so the diff it starts already uses the moved anchors.
+        anchors = anchors.compactMap { $0.adjusted(for: edit) }
+        alignmentMarks[edit.side] = alignmentMarks[edit.side].flatMap { edit.map(line: $0) }
         isTyping = typing
         setDocument(document.applying(edit), on: edit.side)
         isTyping = false
@@ -523,6 +564,8 @@ final class CompareModel {
         typingSession = nil
         undoManager?.removeAllActions(withTarget: self)
         replacements += 1
+        anchors = []
+        alignmentMarks = [:]
     }
 
     // MARK: Diffing
@@ -549,6 +592,7 @@ final class CompareModel {
         let rightDocument = right.document
         let revisions = (left.revision, right.revision)
         let options = options
+        let anchors = anchors
         isComputing = true
         diffTask = Task {
             if delay > .zero {
@@ -556,7 +600,7 @@ final class CompareModel {
                 guard !Task.isCancelled else { return }
             }
             let result = await Task.detached(priority: .userInitiated) {
-                LineDiff(left: leftDocument, right: rightDocument, options: options)
+                LineDiff(left: leftDocument, right: rightDocument, options: options, anchors: anchors)
             }.value
             guard !Task.isCancelled else { return }
             diff = result

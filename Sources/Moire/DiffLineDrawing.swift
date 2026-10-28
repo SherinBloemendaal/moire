@@ -50,6 +50,7 @@ extension DiffListController {
             }
             let color = row.kind == .same ? Palette.gutterText : (side == .left ? Palette.removedNumber : Palette.addedNumber)
             drawNumber(number, rightEdge: frame.minX + DiffMetrics.actionWidth + metrics.numberWidth, color: color)
+            if alignmentMarks[side] == number { drawAlignmentMark(in: frame) }
             let text = NSRect(
                 x: frame.minX + metrics.gutterWidth, y: 0,
                 width: frame.width - metrics.gutterWidth - DiffMetrics.trailingPadding, height: bounds.height
@@ -58,6 +59,27 @@ extension DiffListController {
         }
         Palette.paneBorder.setFill()
         NSRect(x: sideFrame(.left).maxX, y: 0, width: 1, height: bounds.height).fill()
+        if let left = row.left, let right = row.right, display?.diff.anchors.contains(LineAnchor(left: left, right: right)) == true {
+            drawAnchorLink(atX: sideFrame(.left).maxX + 0.5, height: bounds.height)
+        }
+    }
+
+    /// A marked line: tinted, with a bar along its left edge.
+    private func drawAlignmentMark(in frame: NSRect) {
+        Palette.flash.setFill()
+        frame.fill()
+        Palette.iris.setFill()
+        NSRect(x: frame.minX, y: 0, width: 2, height: frame.height).fill()
+    }
+
+    /// A link on the divider of a row whose lines were aligned by hand.
+    private func drawAnchorLink(atX x: CGFloat, height: CGFloat) {
+        guard let image = DiffSymbols.image("link", size: 9, color: Palette.iris) else { return }
+        let size = NSSize(width: image.size.width + 6, height: min(height - 2, image.size.height + 4))
+        let frame = NSRect(x: x - size.width / 2, y: (height - size.height) / 2, width: size.width, height: size.height)
+        Palette.pane.setFill()
+        NSBezierPath(roundedRect: frame, xRadius: size.height / 2, yRadius: size.height / 2).fill()
+        image.draw(in: NSRect(x: x - image.size.width / 2, y: (height - image.size.height) / 2, width: image.size.width, height: image.size.height))
     }
 
     /// `side` is nil for an unchanged row, which shows the left line with both numbers.
@@ -82,6 +104,9 @@ extension DiffListController {
         }
         let shown = side ?? .left
         guard let number = row.line(on: shown) else { return }
+        if alignmentMarks[shown] == number {
+            drawAlignmentMark(in: NSRect(x: unifiedTextX - 4, y: 0, width: bounds.width - unifiedTextX + 4, height: bounds.height))
+        }
         let segments = side == nil ? nil : segments(forRow: index, of: row)
         let text = NSRect(x: unifiedTextX, y: 0, width: bounds.width - unifiedTextX - DiffMetrics.trailingPadding, height: bounds.height)
         drawText(side: shown, line: number, segments: shown == .left ? segments?.left : segments?.right, in: text)

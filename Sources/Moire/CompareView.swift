@@ -87,7 +87,8 @@ struct CompareView: View {
                             fontSize: model.fontSize,
                             scrollRequest: model.scrollRequest,
                             searchGeneration: model.searchGeneration,
-                            flashedLine: model.flashedLine
+                            flashedLine: model.flashedLine,
+                            alignmentMarks: model.alignmentMarks
                         ))
                         ChangeMap(model: model, diff: diff)
                     }

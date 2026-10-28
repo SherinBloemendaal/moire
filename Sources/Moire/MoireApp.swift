@@ -149,6 +149,11 @@ struct MoireCommands: Commands {
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 .disabled(!isText || compare.currentHunk == nil)
             Divider()
+            Button("Align Marked Lines") { compare.alignMarkedLines() }
+                .disabled(!isText || !compare.canAlign)
+            Button("Clear Alignments") { compare.clearAlignments() }
+                .disabled(!isText || (compare.anchors.isEmpty && compare.alignmentMarks.isEmpty))
+            Divider()
             Button("Swap Sides") {
                 if isText { compare.swapSides() } else { state.folders.swapSides() }
             }

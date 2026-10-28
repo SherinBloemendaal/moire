@@ -13,6 +13,7 @@ struct DiffListState: Equatable {
     var scrollRequest: ScrollRequest?
     var searchGeneration: Int
     var flashedLine: FlashedLine?
+    var alignmentMarks: [SideID: Int]
 }
 
 /// The comparison itself: every line of both sides, aligned, with the changes marked. An
@@ -424,21 +425,44 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         return .row
     }
 
-    func menu(forLine line: Int) -> NSMenu? {
-        guard let display, let hunk = hunk(atLine: line) else { return nil }
+    func menu(forLine line: Int, at point: NSPoint) -> NSMenu? {
+        guard let display, line < display.count else { return nil }
         let menu = NSMenu()
-        menu.addItem(MenuAction.item("Copy Change to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) })
-        menu.addItem(MenuAction.item("Copy Change to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) })
-        if let row = display[line].row {
-            menu.addItem(.separator())
-            menu.addItem(MenuAction.item("Copy This Line to Right", image: "arrow.right.to.line") { [model] in model.copy(row: row, toRight: true) })
-            menu.addItem(MenuAction.item("Copy This Line to Left", image: "arrow.left.to.line") { [model] in model.copy(row: row, toRight: false) })
-        }
-        menu.addItem(.separator())
         let diff = display.diff
-        menu.addItem(MenuAction.item("Copy Left Lines as Text") { Self.copyLines(diff.left.lines[diff.hunks[hunk].left]) })
-        menu.addItem(MenuAction.item("Copy Right Lines as Text") { Self.copyLines(diff.right.lines[diff.hunks[hunk].right]) })
-        return menu
+        if let hunk = hunk(atLine: line) {
+            menu.addItem(MenuAction.item("Copy Change to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) })
+            menu.addItem(MenuAction.item("Copy Change to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) })
+            if let row = display[line].row {
+                menu.addItem(.separator())
+                menu.addItem(MenuAction.item("Copy This Line to Right", image: "arrow.right.to.line") { [model] in model.copy(row: row, toRight: true) })
+                menu.addItem(MenuAction.item("Copy This Line to Left", image: "arrow.left.to.line") { [model] in model.copy(row: row, toRight: false) })
+            }
+            menu.addItem(.separator())
+            menu.addItem(MenuAction.item("Copy Left Lines as Text") { Self.copyLines(diff.left.lines[diff.hunks[hunk].left]) })
+            menu.addItem(MenuAction.item("Copy Right Lines as Text") { Self.copyLines(diff.right.lines[diff.hunks[hunk].right]) })
+        }
+        addAlignmentItems(to: menu, line: line, at: point)
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    /// Mark a line on each side, then align them; or undo an alignment.
+    private func addAlignmentItems(to menu: NSMenu, line: Int, at point: NSPoint) {
+        guard let display else { return }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        if case .text(let side, let number) = target(at: point, line: line) {
+            let isMarked = model.alignmentMarks[side] == number
+            menu.addItem(MenuAction.item(isMarked ? "Unmark Line" : "Mark \(side.name) Line for Alignment", image: "pin") { [model] in
+                model.toggleAlignmentMark(side: side, line: number)
+            })
+        }
+        menu.addItem(MenuAction.item("Align Marked Lines", image: "link", isEnabled: model.canAlign) { [model] in model.alignMarkedLines() })
+        if let row = display[line].row {
+            let diffRow = display.diff.row(at: row, withSegments: false)
+            if let left = diffRow.left, let right = diffRow.right, let anchor = display.diff.anchors.first(where: { $0.left == left && $0.right == right }) {
+                menu.addItem(MenuAction.item("Remove This Alignment") { [model] in model.removeAlignment(anchor) })
+            }
+        }
+        menu.addItem(MenuAction.item("Clear Alignments", isEnabled: !model.anchors.isEmpty || !model.alignmentMarks.isEmpty) { [model] in model.clearAlignments() })
     }
 
     private static func copyLines(_ lines: Slice<Lines>) {
@@ -490,6 +514,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     var currentHunk: Int? { state?.currentHunk }
     var flashedLine: FlashedLine? { state?.flashedLine }
+    var alignmentMarks: [SideID: Int] { state?.alignmentMarks ?? [:] }
 
     func segments(forRow row: Int, of diffRow: DiffRow) -> (left: [Segment], right: [Segment])? {
         guard diffRow.kind == .changed, let display else { return nil }
@@ -560,7 +585,7 @@ final class DiffLineView: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        controller?.menu(forLine: index)
+        controller?.menu(forLine: index, at: convert(event.locationInWindow, from: nil))
     }
 
     override func resetCursorRects() {
