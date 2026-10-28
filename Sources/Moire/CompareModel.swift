@@ -480,16 +480,21 @@ final class CompareModel {
         }
         isAskingToReload.insert(side)
         defer { isAskingToReload.remove(side) }
+        if Self.confirmReload(url, side) {
+            load(url, into: side, askFirst: false)
+        } else {
+            diskSignatures[side] = FileSignature(url: url)
+        }
+    }
+
+    /// Asks whether to reload over unsaved changes; replaced in tests, where an alert cannot be answered.
+    static var confirmReload: (URL, SideID) -> Bool = { url, side in
         let alert = NSAlert()
         alert.messageText = "\(url.lastPathComponent) changed on disk"
         alert.informativeText = "Another app saved this file, but the \(side.name.lowercased()) side also has changes that are not saved yet. Reload it and lose your changes, or keep your version?"
         alert.addButton(withTitle: "Keep Mine")
         alert.addButton(withTitle: "Reload")
-        if alert.runModal() == .alertSecondButtonReturn {
-            load(url, into: side, askFirst: false)
-        } else {
-            diskSignatures[side] = FileSignature(url: url)
-        }
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     // MARK: Changes
