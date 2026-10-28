@@ -64,6 +64,8 @@ struct FolderView: View {
             model.open(urls)
             return true
         }
+        // Item numbers belong to one comparison; a new one numbers its items afresh.
+        .onChange(of: model.generation) { selection = [] }
         .sheet(item: Binding(get: { syncItems.map(SyncRequest.init) }, set: { syncItems = $0?.items })) { request in
             SyncSheet(model: model, items: request.items)
         }
@@ -103,7 +105,7 @@ struct FolderView: View {
         case .rename(let item, let side):
             model.rename(item, side: side)
         case .sync(let items):
-            guard model.canSync else { return }
+            guard model.canPlanSync else { return }
             syncItems = items
         }
     }
@@ -188,8 +190,10 @@ struct FolderView: View {
 
             Button { syncItems = Array(selection) } label: { Image(systemName: "arrow.triangle.2.circlepath") }
                 .buttonStyle(.borderless)
-                .help(model.hasBothSides && !model.canSync ? "Sync works between folders on this Mac only" : "Sync the folders, or the selected items")
-                .disabled(model.tree == nil || model.isComparing || !model.canSync)
+                .help(model.hasBothSides && !model.canSync ? "Sync works between folders on this Mac only"
+                    : !model.isComplete && model.tree != nil ? "Compare to the end first: a stopped comparison is not complete enough to sync"
+                    : "Sync the folders, or the selected items")
+                .disabled(!model.canPlanSync)
 
             Picker("Show", selection: $model.filter) {
                 Text("All").tag(FolderModel.Filter.all)
@@ -430,7 +434,11 @@ private struct SyncSheet: View {
     @State private var done: Int?
     @State private var failures: [FolderSync.Failure]?
     /// Worked out again only when the mode or direction changes, not on every progress update.
-    @State private var plan: FolderSync.Plan?
+    @State private var job: FolderModel.SyncJob?
+    @State private var stop = FolderModel.SyncStop()
+    @State private var wasStopped = false
+
+    private var plan: FolderSync.Plan? { job?.plan }
 
     private struct Choice: Hashable {
         let mode: FolderSync.Mode
@@ -477,10 +485,16 @@ private struct SyncSheet: View {
             }
 
             if let failures {
+                if wasStopped {
+                    Label("Stopped after \(done ?? 0) of \(plan?.actions.count ?? 0) actions. The folders are compared again.", systemImage: "stop.circle.fill")
+                        .foregroundStyle(Theme.changed)
+                }
                 if failures.isEmpty {
-                    Label("Done. The folders are compared again.", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.added)
+                    if !wasStopped {
+                        Label("Done. The folders are compared again.", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.added)
+                    }
                 } else {
-                    Label("\(failures.count) actions failed:", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.removed)
+                    Label("\(failures.count) actions failed or were left alone:", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.removed)
                     ScrollView {
                         Text(failures.map { "\($0.action.path): \($0.message)" }.joined(separator: "\n"))
                             .font(.caption.monospaced())
@@ -496,8 +510,18 @@ private struct SyncSheet: View {
                     ProgressView(value: Double(done), total: Double(max(plan.actions.count, 1)))
                 }
                 Spacer()
-                Button(failures == nil ? "Cancel" : "Close") { dismiss() }
+                if done != nil, failures == nil {
+                    // Running: stop between two actions; nothing is left half done.
+                    Button("Stop") {
+                        wasStopped = true
+                        stop.stop()
+                    }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(wasStopped)
+                } else {
+                    Button(failures == nil ? "Cancel" : "Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
                 if failures == nil {
                     Button("Sync") { run() }
                         .keyboardShortcut(.defaultAction)
@@ -507,30 +531,32 @@ private struct SyncSheet: View {
         }
         .padding(20)
         .frame(width: 560)
+        .interactiveDismissDisabled(done != nil && failures == nil)
         .task(id: Choice(mode: mode, direction: direction)) {
             guard done == nil else { return }
-            plan = model.plan(mode: mode, direction: direction, selection: Set(items))
+            job = model.plan(mode: mode, direction: direction, selection: Set(items))
         }
     }
 
     private var explanation: String {
-        switch (direction, mode) {
+        let what = switch (direction, mode) {
         case (.both, _):
             "Copies what is missing on either side, and the newer version of every file that differs. Files that differ but have the same date are left alone."
         case (_, .update):
             "Copies what is missing on the \(target) side and replaces older files there. Nothing is deleted, and newer files on the \(target) side are kept."
         case (_, .mirror):
-            "Makes the \(target) side an exact copy. Items only the \(target) side has go to the Trash, so you can put them back."
+            "Makes the \(target) side an exact copy. Items only the \(target) side has go to the Trash, so you can put them back; files that are replaced are overwritten."
         }
+        return what + " Anything that changed since the comparison is left alone."
     }
 
     private var target: String { direction == .rightToLeft ? "left" : "right" }
 
     private func run() {
-        guard let plan else { return }
+        guard let job else { return }
         done = 0
         Task {
-            failures = await model.run(plan) { done = $0 }
+            failures = await model.run(job, stop: stop) { done = $0 }
         }
     }
 }
@@ -550,7 +576,7 @@ private struct ActionRow: View {
 
     private var icon: String {
         switch action {
-        case .copy(_, let toRight, _): toRight ? "arrow.right.doc.on.clipboard" : "arrow.left.doc.on.clipboard"
+        case .copy(_, _, let toRight, _): toRight ? "arrow.right.doc.on.clipboard" : "arrow.left.doc.on.clipboard"
         case .createFolder: "folder.badge.plus"
         case .trash: "trash"
         }
@@ -566,7 +592,7 @@ private struct ActionRow: View {
 
     private var detail: String {
         switch action {
-        case let .copy(_, toRight, bytes): "\(toRight ? "to right" : "to left") · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        case let .copy(_, _, toRight, bytes): "\(toRight ? "to right" : "to left") · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         case .createFolder(_, let onRight): "new folder on the \(onRight ? "right" : "left")"
         case .trash(_, let onRight): "from the \(onRight ? "right" : "left")"
         }

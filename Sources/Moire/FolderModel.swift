@@ -2,6 +2,7 @@ import AppKit
 import MoireKit
 import os
 import SwiftUI
+import Synchronization
 
 /// One side of a folder comparison: a folder on this Mac or one on a server.
 enum FolderLocation: Hashable {
@@ -92,6 +93,10 @@ final class FolderModel {
     private(set) var tree: FolderTree?
     private(set) var progress: FolderProgress?
     private(set) var isComparing = false
+    /// The last comparison ran to the end (it was not stopped and did not fail).
+    private(set) var isComplete = false
+    /// Changes with every new comparison, so item numbers from an old one are dropped.
+    private(set) var generation = 0
     private(set) var startedAt: Date?
     private(set) var finishedIn: Duration?
     private(set) var leftVolume: Volume?
@@ -239,6 +244,8 @@ final class FolderModel {
         let engine = FolderEngine(sources: { (try makeLeft(), try makeRight()) }, settings: settings, cache: cache)
         self.engine = engine
         isComparing = true
+        isComplete = false
+        generation += 1
         startedAt = Date()
         finishedIn = nil
         show(FolderTree())
@@ -276,6 +283,7 @@ final class FolderModel {
             self.finishedIn = clock.now - started
             switch result {
             case .success(let tree):
+                self.isComplete = true
                 self.show(tree)
             case .failure(is CancellationError):
                 // Stopped: keep what was found so far.
@@ -293,7 +301,7 @@ final class FolderModel {
         guard let tree, let root = side == .left ? left : right else { return nil }
         let info = side == .left ? tree.left(item) : tree.right(item)
         guard info.exists else { return nil }
-        return root.appending(path: tree.path(of: item))
+        return root.appending(path: tree.path(of: item, on: side == .left ? .left : .right))
     }
 
     /// Where downloaded copies of remote files go; leftovers older than a day are removed at launch.
@@ -308,9 +316,9 @@ final class FolderModel {
     /// files are used where they are. A side without the file is `nil`.
     func filesForComparison(_ item: Int) async throws -> (left: (url: URL, origin: String)?, right: (url: URL, origin: String)?) {
         guard let tree, item < tree.count else { return (nil, nil) }
-        let path = tree.path(of: item)
         var result: [SideID: (url: URL, origin: String)] = [:]
         for side in SideID.allCases {
+            let path = tree.path(of: item, on: side == .left ? .left : .right)
             let info = side == .left ? tree.left(item) : tree.right(item)
             guard info.exists, let location = location(side) else { continue }
             switch location {
@@ -325,7 +333,13 @@ final class FolderModel {
                 }
                 let makeSource = Self.sourceMaker(.remote(remote))
                 let folder = Self.downloads.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-                let destination = folder.appending(path: tree.name(of: item))
+                // A name from a server is used for one file in a folder of its own, never as a path:
+                // a hostile listing with "../" in a name must not write anywhere else.
+                let safeName = tree.name(of: item).replacingOccurrences(of: "/", with: "_")
+                guard !safeName.isEmpty, safeName != ".", safeName != ".." else {
+                    throw CocoaError(.fileWriteInvalidFileName, userInfo: [NSLocalizedDescriptionKey: "The server gave this file a name that cannot be saved."])
+                }
+                let destination = folder.appending(path: safeName)
                 try await Task.detached(priority: .userInitiated) {
                     let data = try makeSource().open(path).readAll()
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -399,7 +413,10 @@ final class FolderModel {
             return
         }
         let destination = url.deletingLastPathComponent().appending(path: name)
-        guard !FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) else {
+        // Changing only the case is fine: on a case-insensitive disk the "existing" item is this one.
+        let isSameItem = (try? destination.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier)
+            .map { identifier in (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier)?.isEqual(identifier) == true } ?? false
+        guard isSameItem || !FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) else {
             errorMessage = "\"\(name)\" already exists there."
             return
         }
@@ -413,16 +430,34 @@ final class FolderModel {
 
     // MARK: Sync
 
-    func plan(mode: FolderSync.Mode, direction: FolderSync.Direction, selection: Set<Int>) -> FolderSync.Plan? {
-        guard let tree, !isComparing, canSync else { return nil }
-        return FolderSync.plan(tree, mode: mode, direction: direction, settings: settings, selection: selection)
+    /// A plan with the folders it was made for, so it runs there even when the window has moved
+    /// on to other folders in the meantime.
+    nonisolated struct SyncJob: Sendable {
+        let plan: FolderSync.Plan
+        let left: URL
+        let right: URL
+    }
+
+    /// Lets the sync sheet stop a running sync between two actions.
+    nonisolated final class SyncStop: Sendable {
+        private let stopped = Atomic(false)
+        func stop() { stopped.store(true, ordering: .relaxed) }
+        var isStopped: Bool { stopped.load(ordering: .relaxed) }
+    }
+
+    /// Only a finished comparison can be synced: after Stop, files whose contents were never
+    /// read would count as different, and folders not yet read would be left out.
+    var canPlanSync: Bool { tree != nil && isComplete && canSync }
+
+    func plan(mode: FolderSync.Mode, direction: FolderSync.Direction, selection: Set<Int>) -> SyncJob? {
+        guard let tree, canPlanSync, let left, let right else { return nil }
+        return SyncJob(plan: FolderSync.plan(tree, mode: mode, direction: direction, settings: settings, selection: selection), left: left, right: right)
     }
 
     /// Runs a plan off the main thread and compares again afterwards.
-    func run(_ plan: FolderSync.Plan, progress: @escaping @MainActor @Sendable (Int) -> Void) async -> [FolderSync.Failure] {
-        guard let left, let right else { return [] }
+    func run(_ job: SyncJob, stop: SyncStop, progress: @escaping @MainActor @Sendable (Int) -> Void) async -> [FolderSync.Failure] {
         let failures = await Task.detached(priority: .userInitiated) {
-            FolderSync.execute(plan, left: left, right: right, progress: { done in
+            FolderSync.execute(job.plan, left: job.left, right: job.right, isCancelled: { stop.isStopped }, progress: { done in
                 Task { @MainActor in progress(done) }
             })
         }.value
