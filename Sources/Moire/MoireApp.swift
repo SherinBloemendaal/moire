@@ -1,4 +1,5 @@
 import AppKit
+import MoireKit
 import SwiftUI
 
 @main
@@ -32,11 +33,31 @@ final class AppState {
     var recents: RecentSessions { RecentSessions.shared }
     /// True while the text comparison shows a pair picked from the folder comparison.
     var cameFromFolders = false
+    /// Archives unpacked for the folder comparison.
+    let archives = ArchiveRouter()
+
+    init() {
+        compare.fileView.openArchivesAsFolders = { [weak self] left, right, automatic in
+            // A pair of archives opened from inside the folder comparison does not replace it
+            // on its own; the archive view offers the button instead.
+            guard let self, !(automatic && mode == .folders) else { return }
+            openArchives(left: left, right: right)
+        }
+        watchFolders()
+    }
 
     /// Files and folders from Finder, the Dock or the command line.
     func open(_ urls: [URL]) {
         if let session = urls.first(where: { $0.pathExtension == "moire" }) {
             openSession(session)
+            return
+        }
+        if urls.contains(where: ArchiveRouter.isArchive), urls.allSatisfy({ ArchiveRouter.isArchive($0) || ArchiveRouter.isFolder($0) }) {
+            if urls.count >= 2 {
+                openArchives(left: urls[0], right: urls[1])
+            } else {
+                openArchives(left: folders.left == nil ? urls[0] : nil, right: folders.left == nil ? nil : urls[0])
+            }
             return
         }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
@@ -68,6 +89,37 @@ final class AppState {
         }
     }
 
+    /// Unpacks archives (a side may also be a folder) and compares them in the folder comparison.
+    func openArchives(left: URL?, right: URL?) {
+        compare.fileView.isOpeningArchives = true
+        archives.open(left: left, right: right) { [weak self] message in
+            guard let self else { return }
+            compare.fileView.isOpeningArchives = false
+            if mode == .folders { folders.errorMessage = message } else { compare.errorMessage = message }
+        } done: { [weak self] left, right in
+            guard let self else { return }
+            compare.fileView.isOpeningArchives = false
+            if let left { folders.left = left }
+            if let right { folders.right = right }
+            cameFromFolders = false
+            withAnimation(.smooth(duration: 0.3)) { mode = .folders }
+        }
+    }
+
+    /// Removes unpacked archives as soon as the folder comparison stops showing them.
+    private func watchFolders() {
+        withObservationTracking {
+            _ = folders.left
+            _ = folders.right
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                archives.release(keeping: [folders.left, folders.right])
+                watchFolders()
+            }
+        }
+    }
+
     func openFromFolders(left: URL?, right: URL?) {
         compare.openPair(left: left, right: right)
         cameFromFolders = true
@@ -77,6 +129,7 @@ final class AppState {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Task.detached(priority: .background) { ArchiveExtractor.removeLeftovers() }
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let flag = arguments.firstIndex(of: "--merge") {
             openMergetool(Array(arguments[(flag + 1)...]))
@@ -107,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         Windows.shared.open(urls)
     }
+
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -155,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        for state in Windows.shared.states { state.archives.removeAll() }
         // git mergetool with `trustExitCode` reads a failure as "not merged yet".
         guard let merge = Windows.shared.states.first(where: { $0.merge.isMergetool })?.merge, merge.exitStatus != 0 else { return }
         exit(merge.exitStatus)
@@ -175,6 +230,10 @@ struct MoireCommands: Commands {
         guard isMerge, let chunk = merge.currentChunk, let result = merge.merge, result.chunks.indices.contains(chunk) else { return false }
         return result.chunks[chunk].kind != .unchanged
     }
+    private var files: FileViewModel { compare.fileView }
+    /// Hex, image, table, document text or archive instead of the text comparison.
+    private var isSpecial: Bool { isText && files.isSpecial && !compare.isEditing }
+    private var changeCount: Int { isSpecial ? files.differenceCount : compare.hunkCount }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -243,19 +302,23 @@ struct MoireCommands: Commands {
                 .disabled(!state.canPrint)
         }
         CommandMenu("Compare") {
-            Button("Next Change") { compare.goToNextChange() }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.hunkCount == 0)
-            Button("Previous Change") { compare.goToPreviousChange() }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.hunkCount == 0)
+            Button("Next Change") {
+                if isSpecial { files.navigator?.goToNextDifference() } else { compare.goToNextChange() }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .disabled(!isText || changeCount == 0)
+            Button("Previous Change") {
+                if isSpecial { files.navigator?.goToPreviousDifference() } else { compare.goToPreviousChange() }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            .disabled(!isText || changeCount == 0)
             Divider()
             Button("Copy Change to Right") { compare.copyCurrentChange(toRight: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.currentHunk == nil)
+                .disabled(!isText || isSpecial || compare.currentHunk == nil)
             Button("Copy Change to Left") { compare.copyCurrentChange(toRight: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .disabled(!isText || compare.currentHunk == nil)
+                .disabled(!isText || isSpecial || compare.currentHunk == nil)
             Divider()
             Button("Swap Sides") {
                 if isText { compare.swapSides() } else { state.folders.swapSides() }
@@ -264,7 +327,7 @@ struct MoireCommands: Commands {
             .disabled(isMerge)
             Button(compare.isEditing ? "Show Differences" : "Edit Text") { compare.isEditing.toggle() }
                 .keyboardShortcut("e")
-                .disabled(!isText || compare.hasBinarySide)
+                .disabled(!isText || compare.hasBinarySide || !files.allowsEditing)
         }
         CommandMenu("Merge") {
             Button("Next Conflict") { merge.goToNextConflict() }
@@ -297,6 +360,14 @@ struct MoireCommands: Commands {
                 .disabled(!isMerge || merge.currentChunk.map { merge.resolution(of: $0) == nil } ?? true)
         }
         CommandGroup(after: .toolbar) {
+            Menu("View As") {
+                ForEach(FileView.allCases) { view in
+                    Toggle(view.title, isOn: Binding(get: { files.current == view }, set: { if $0 { files.chosen = view } }))
+                        .disabled(!files.available.contains(view))
+                }
+            }
+            .disabled(!isText || compare.isEmpty)
+            Divider()
             Button("Side by Side") { compare.layout = .sideBySide }
                 .keyboardShortcut("1", modifiers: [.command, .control])
             Button("Unified") { compare.layout = .unified }

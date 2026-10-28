@@ -44,12 +44,15 @@ struct ContentView: View {
                 .fixedSize()
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                if state.mode == .text, !state.compare.isEmpty, !state.compare.isEditing {
+                    ViewAsPicker(files: state.compare.fileView)
+                }
                 if state.mode == .text, !state.compare.isEmpty || state.compare.isEditing {
                     Toggle(isOn: Bindable(state.compare).isEditing) {
                         Label(state.compare.isEditing ? "Done" : "Edit", systemImage: state.compare.isEditing ? "checkmark" : "pencil")
                     }
                     .toggleStyle(.button)
-                    .disabled(state.compare.hasBinarySide)
+                    .disabled(state.compare.hasBinarySide || !state.compare.fileView.allowsEditing)
                     .help(state.compare.isEditing ? "Show the differences (⌘E)" : "Edit both sides (⌘E)")
                 }
             }
