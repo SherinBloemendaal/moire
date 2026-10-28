@@ -63,9 +63,15 @@ extension AppState {
     }
 
     func printCurrent() {
+        guard let page = printPage() else { return }
+        Printer.print(html: page.html, title: page.title)
+    }
+
+    /// The HTML page and job title that Print lays out for the current mode, or nil when there is nothing to print.
+    func printPage() -> (html: String, title: String)? {
         switch mode {
         case .text:
-            guard let diff = compare.diff, ComparisonExport.canExport(compare) else { return }
+            guard let diff = compare.diff, ComparisonExport.canExport(compare) else { return nil }
             let page = HTMLReport.page(
                 for: diff,
                 left: HTMLReport.Side(title: compare.left.title, detail: compare.left.subtitle),
@@ -73,12 +79,12 @@ extension AppState {
                 context: compare.onlyChanges ? 3 : nil,
                 generated: Date.now.formatted(date: .long, time: .shortened)
             )
-            Printer.print(html: page, title: "\(compare.left.title) and \(compare.right.title)")
+            return (page, "\(compare.left.title) and \(compare.right.title)")
         case .folders:
-            guard let page = folderReport(.html) else { return }
-            Printer.print(html: page, title: "Folder comparison")
+            guard let page = folderReport(.html) else { return nil }
+            return (page, "Folder comparison")
         case .merge:
-            guard let result = merge.merge?.result(merge.resolutions, labels: merge.labels) else { return }
+            guard let result = merge.merge?.result(merge.resolutions, labels: merge.labels) else { return nil }
             let text = result.text
             let page = """
             <!doctype html><html><head><meta charset="utf-8"><style>
@@ -86,7 +92,7 @@ extension AppState {
             h1 { font: 600 14pt -apple-system, sans-serif; white-space: normal }
             </style></head><body><h1>Merge result</h1>\(FolderReport.escape(text))</body></html>
             """
-            Printer.print(html: page, title: "Merge result")
+            return (page, "Merge result")
         }
     }
 
