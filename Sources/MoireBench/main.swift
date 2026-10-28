@@ -6,10 +6,14 @@ import MoireKit
 //   moire-bench run [--files 100000] [--large] [--repeat 3] [--root PATH]
 //                   [--only PREFIX] [--json OUT] [--baseline FILE] [--max-regression 0.5]
 //   moire-bench compare --base BASE.json [--base …] --head HEAD.json [--head …] [--max-regression 0.5]
+//                       [--markdown OUT]
 //   moire-bench clean [--root PATH]
 //
 // Every scenario also checks the engine's answer against what the generator changed, so a fast
 // but wrong engine fails instead of looking good.
+//
+// Exit codes: 0 fine, 3 slower than the baseline or base commit, 1 anything else (a wrong answer,
+// a bad option, a report that cannot be read).
 
 struct Report: Codable {
     struct Scenario: Codable {
@@ -42,6 +46,8 @@ struct Options {
     /// For `compare`: reports of the commit compared against, and of the commit being checked.
     var bases: [URL] = []
     var heads: [URL] = []
+    /// For `compare`: a file the comparison is added to as a Markdown table, such as the job summary.
+    var markdown: URL?
 
     init(_ arguments: [String]) throws {
         var arguments = arguments[...]
@@ -64,6 +70,7 @@ struct Options {
             case "--only": only = try value(flag)
             case "--base": bases.append(URL(filePath: try value(flag)))
             case "--head": heads.append(URL(filePath: try value(flag)))
+            case "--markdown": markdown = URL(filePath: try value(flag))
             case "--max-regression": maxRegression = try Double(value(flag)).orThrow(BenchError.usage("--max-regression needs a number"))
             default: throw BenchError.usage("unknown option \(flag)")
             }
@@ -281,17 +288,35 @@ func compare(_ options: Options) throws {
     let base = try fastest(options.bases)
     let head = try fastest(options.heads)
     var slower: [String] = []
+    var table = ["| Scenario | This commit | Base | Change | |", "| --- | ---: | ---: | ---: | --- |"]
     for (name, before) in base.sorted(by: { $0.key < $1.key }) {
         guard let after = head[name] else {
             print(String(format: "%-36@ only in the base", name as NSString))
+            table.append("| `\(name)` | | \(String(format: "%.3f s", before)) | | only in the base |")
             continue
         }
         let ratio = after / before
         let gated = before >= minimumGatedSeconds
+        let isSlower = gated && ratio > 1 + options.maxRegression
         print(String(format: "%-36@ %8.3f s  base %8.3f s  %+6.0f%%%@", name as NSString, after, before, (ratio - 1) * 100, gated ? "" : "  (too short to gate)"))
-        if gated, ratio > 1 + options.maxRegression {
+        let note = isSlower ? "slower" : gated ? "" : "too short to judge"
+        table.append(String(format: "| `%@` | %.3f s | %.3f s | %+.0f%% | %@ |", name, after, before, (ratio - 1) * 100, note))
+        if isSlower {
             slower.append(String(format: "  %@: %.3f s, base %.3f s", name, after, before))
         }
+    }
+    if let markdown = options.markdown {
+        let verdict = slower.isEmpty
+            ? "No scenario of \(minimumGatedSeconds) s or more is over \(Int(options.maxRegression * 100))% slower than in the base commit."
+            : "\(slower.count) scenario\(slower.count == 1 ? " is" : "s are") over \(Int(options.maxRegression * 100))% slower than in the base commit."
+        let text = ([verdict, ""] + table).joined(separator: "\n") + "\n"
+        if !FileManager.default.fileExists(atPath: markdown.path(percentEncoded: false)) {
+            FileManager.default.createFile(atPath: markdown.path(percentEncoded: false), contents: nil)
+        }
+        let handle = try FileHandle(forWritingTo: markdown)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(text.utf8))
     }
     if !slower.isEmpty { throw BenchError.regression(slower) }
 }
@@ -311,5 +336,6 @@ do {
     }
 } catch {
     FileHandle.standardError.write(Data("moire-bench: \(error)\n".utf8))
+    if case BenchError.regression = error { exit(3) }
     exit(1)
 }

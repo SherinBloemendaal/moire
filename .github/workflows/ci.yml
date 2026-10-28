@@ -68,8 +68,7 @@ jobs:
 
       # A fixed baseline from another runner does not work: GitHub's runners differ in speed by
       # 1.5 to 2 times between runs. Both commits are timed on this runner instead, in turns, so a
-      # slow runner or a slow stretch slows both. Each keeps its fastest run, and only a slowdown of
-      # more than 50% in a scenario of 0.5 s or more fails the build.
+      # slow runner or a slow stretch slows both. Each keeps its fastest run.
       - name: Run
         run: |
           set -euo pipefail
@@ -77,9 +76,23 @@ jobs:
             ../base/.build/release/moire-bench run --files 20000 --large --only engine --root "$RUNNER_TEMP/bench-base" --json "base-$round.json"
             .build/release/moire-bench run --files 20000 --large --only engine --root "$RUNNER_TEMP/bench-head" --json "head-$round.json"
           done
-          .build/release/moire-bench compare --max-regression 0.5 \
+
+      # Reports and does not gate: even on one runner, the same engine code measured up to 41%
+      # apart. A slowdown of more than 50% in a scenario of 0.5 s or more becomes a warning; a
+      # bench that cannot build, run or read its reports still fails the job.
+      - name: Compare
+        run: |
+          set -uo pipefail
+          echo "### Benchmark against the base commit" >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          .build/release/moire-bench compare --max-regression 0.5 --markdown "$GITHUB_STEP_SUMMARY" \
             --base base-1.json --base base-2.json --base base-3.json \
-            --head head-1.json --head head-2.json --head head-3.json
+            --head head-1.json --head head-2.json --head head-3.json || status=$?
+          case "$status" in
+            0) ;;
+            3) echo "::warning title=Benchmark::A scenario is over 50% slower than in the base commit; see the job summary. This does not fail CI." ;;
+            *) echo "::error title=Benchmark::moire-bench compare failed with exit code $status"; exit "$status" ;;
+          esac
 
       - name: Upload results
         if: always()

@@ -27,9 +27,17 @@ The `benchmark` job does not compare with saved numbers: GitHub's runners (Apple
 a slow runner with no change to the engine. The job builds `moire-bench` for this commit and for
 the one before it (the pull request's base, or main before the push), times both on the same runner
 three times in turns, and runs `moire-bench compare` on the reports. Each commit keeps its fastest
-run per scenario, since a slow stretch of the runner only ever adds time. The build fails when a
-scenario of 0.5 s or more is over 50% slower than in the commit before; shorter ones vary too much
-on those machines (the same 0.1 s scenario measured from 0.06 s to 0.23 s).
+run per scenario, since a slow stretch of the runner only ever adds time.
+
+The job reports and does not gate. Even timed on one runner, the same engine code measured up to
+41% apart, so the comparison goes into the job summary, and a scenario of 0.5 s or more that is over
+50% slower than in the commit before becomes a warning on the run; CI stays green. Shorter scenarios
+are listed but not judged: they vary too much on those machines (the same 0.1 s scenario measured
+from 0.06 s to 0.23 s). The job still fails when the benchmark cannot be built or run, or its reports
+cannot be read.
+
+`moire-bench compare` exits 3 when a scenario is slower and 1 on any other error; `--markdown FILE`
+adds the comparison to a file as a table.
 
 ```bash
 .build/release/moire-bench compare --base base-1.json --base base-2.json --head head-1.json --head head-2.json
