@@ -335,6 +335,7 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     /// What sits under a point of a row.
     enum Target {
         case mergeButton(hunk: Int, toRight: Bool)
+        case lineButton(row: Int, toRight: Bool)
         case fold(Range<Int>)
         case text(side: SideID, line: Int)
         case row
@@ -375,6 +376,9 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         case .mergeButton(let hunk, let toRight):
             endEditing()
             model.copy(hunk: hunk, toRight: toRight)
+        case .lineButton(let row, let toRight):
+            endEditing()
+            model.copy(row: row, toRight: toRight)
         case .fold(let rows):
             endEditing()
             model.expand(fold: rows)
@@ -399,6 +403,9 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         guard let row = item.row else { return .row }
         let diffRow = display.diff.row(at: row, withSegments: false)
+        if diffRow.hunk != nil, let button = lineButtons(for: item).first(where: { $0.frame.contains(point) }) {
+            return .lineButton(row: row, toRight: button.toRight)
+        }
         switch item {
         case .removed:
             if let number = diffRow.left, point.x >= unifiedTextX { return .text(side: .left, line: number) }
@@ -420,8 +427,13 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
     func menu(forLine line: Int) -> NSMenu? {
         guard let display, let hunk = hunk(atLine: line) else { return nil }
         let menu = NSMenu()
-        menu.addItem(MenuAction.item("Copy to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) })
-        menu.addItem(MenuAction.item("Copy to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) })
+        menu.addItem(MenuAction.item("Copy Change to Right", image: "arrow.right") { [model] in model.copy(hunk: hunk, toRight: true) })
+        menu.addItem(MenuAction.item("Copy Change to Left", image: "arrow.left") { [model] in model.copy(hunk: hunk, toRight: false) })
+        if let row = display[line].row {
+            menu.addItem(.separator())
+            menu.addItem(MenuAction.item("Copy This Line to Right", image: "arrow.right.to.line") { [model] in model.copy(row: row, toRight: true) })
+            menu.addItem(MenuAction.item("Copy This Line to Left", image: "arrow.left.to.line") { [model] in model.copy(row: row, toRight: false) })
+        }
         menu.addItem(.separator())
         let diff = display.diff
         menu.addItem(MenuAction.item("Copy Left Lines as Text") { Self.copyLines(diff.left.lines[diff.hunks[hunk].left]) })
@@ -451,6 +463,25 @@ final class DiffListController: NSObject, NSTableViewDataSource, NSTableViewDele
             return NSRect(x: tableView.bounds.width - size.width - 12, y: y, width: size.width, height: size.height)
         }
         return NSRect(x: sideFrame(.left).maxX + 0.5 - size.width / 2, y: y, width: size.width, height: size.height)
+    }
+
+    /// The buttons that copy one line, shown on the line under the mouse in a change: at the
+    /// outer edge of each side, pointing to the other side, or in place of the sign in unified.
+    func lineButtons(for item: DiffDisplay.Line) -> [(frame: NSRect, toRight: Bool)] {
+        guard let display else { return [] }
+        let size = NSSize(width: DiffMetrics.actionWidth, height: metrics.lineHeight)
+        switch item {
+        case .row where display.layout == .sideBySide:
+            let left = NSPoint(x: sideFrame(.left).minX + 1, y: 0)
+            let right = NSPoint(x: sideFrame(.right).maxX - size.width - 1, y: 0)
+            return [(NSRect(origin: left, size: size), true), (NSRect(origin: right, size: size), false)]
+        case .removed, .added:
+            let x = unifiedTextX - DiffMetrics.signWidth + (DiffMetrics.signWidth - size.width) / 2
+            let isLeft = if case .removed = item { true } else { false }
+            return [(NSRect(origin: NSPoint(x: x, y: 0), size: size), isLeft)]
+        default:
+            return []
+        }
     }
 
     func showsMergeButtons(hunk: Int) -> Bool {

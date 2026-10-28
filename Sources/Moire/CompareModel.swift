@@ -451,6 +451,12 @@ final class CompareModel {
         return LineDiff(left: left.document, right: right.document, options: options)
     }
 
+    /// Copies one line of a change: the left version of that row goes right, or the other way.
+    func copy(row index: Int, toRight: Bool) {
+        guard let diff = currentDiff(), index < diff.rowCount, let edit = diff.edit(copyingRow: index, toRight: toRight) else { return }
+        perform(edit, actionName: toRight ? "Copy Line to Right" : "Copy Line to Left")
+    }
+
     func copyCurrentChange(toRight: Bool) {
         guard let currentHunk else { return }
         copy(hunk: currentHunk, toRight: toRight)

@@ -24,6 +24,9 @@ extension DiffListController {
         }
 
         guard let hunk = hunk(atLine: index), let lines = display.lines(ofHunk: hunk) else { return }
+        if hoveredLine == index {
+            drawLineButtons(for: item)
+        }
         if currentHunk == hunk {
             drawCurrentMark(line: index, hunkLines: lines)
         }
@@ -69,7 +72,7 @@ extension DiffListController {
         if side != .left, let right = row.right {
             drawNumber(right, rightEdge: unifiedNumberRightEdge(.right), color: Palette.gutterText)
         }
-        if let side {
+        if let side, !isHoveredUnified(row: index, side: side) {
             let sign = NSAttributedString(string: side == .left ? "−" : "+", attributes: [
                 .font: metrics.font,
                 .foregroundColor: side == .left ? Palette.removed : Palette.added,
@@ -82,6 +85,27 @@ extension DiffListController {
         let segments = side == nil ? nil : segments(forRow: index, of: row)
         let text = NSRect(x: unifiedTextX, y: 0, width: bounds.width - unifiedTextX - DiffMetrics.trailingPadding, height: bounds.height)
         drawText(side: shown, line: number, segments: shown == .left ? segments?.left : segments?.right, in: text)
+    }
+
+    private func isHoveredUnified(row: Int, side: SideID) -> Bool {
+        guard let hoveredLine, let display, hoveredLine < display.count else { return false }
+        return display[hoveredLine] == (side == .left ? .removed(row: row) : .added(row: row))
+    }
+
+    private func drawLineButtons(for item: DiffDisplay.Line) {
+        for button in lineButtons(for: item) {
+            guard let image = DiffSymbols.image(button.toRight ? "arrow.right" : "arrow.left", size: 9, color: Palette.iris) else { continue }
+            let background = NSBezierPath(roundedRect: button.frame.insetBy(dx: 1, dy: 2), xRadius: 3, yRadius: 3)
+            Palette.pane.setFill()
+            background.fill()
+            Palette.paneBorder.setStroke()
+            background.lineWidth = 1
+            background.stroke()
+            image.draw(in: NSRect(
+                x: button.frame.midX - image.size.width / 2, y: button.frame.midY - image.size.height / 2,
+                width: image.size.width, height: image.size.height
+            ))
+        }
     }
 
     func unifiedNumberRightEdge(_ side: SideID) -> CGFloat {
