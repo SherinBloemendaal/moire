@@ -9,7 +9,7 @@ let usage = """
 usage: moire compare LEFT RIGHT [options]
        moire sync LEFT RIGHT [--mode update|mirror] [--direction right|left|both] [--dry-run] [--yes] [options]
 
-Compare two folders, or two files.
+Compare two folders, or two files. Two text files print a unified diff, like diff -u.
 
 options:
   --method metadata|quick|binary|lines   how files are compared (default: binary, metadata on network disks)
@@ -19,7 +19,7 @@ options:
   --hidden            include names that start with a dot
   --ignore-space      lines: ignore spaces at line ends (--ignore-all-space: all spaces)
   --ignore-case       lines: ignore upper and lower case
-  --format text|json|html                folder report format (default: text)
+  --format text|json|html                report format (default: text; for two files a unified diff)
   --differences       only list items that differ
   --output FILE       write the report to FILE instead of standard output
   --no-cache          read every file, even when an earlier run knows the answer
@@ -154,24 +154,41 @@ func compareFolders(_ arguments: Arguments, left: URL, right: URL) throws -> Fol
     return tree
 }
 
+/// Two files: a unified diff like `diff -u` (or an HTML page, or JSON statistics).
 func compareFiles(_ arguments: Arguments, left: URL, right: URL) throws -> Int32 {
     let a = try FileContent.read(left)
     let b = try FileContent.read(right)
-    switch (a.body, b.body) {
-    case let (.text(leftText, _), .text(rightText, _)):
-        let diff = LineDiff(left: leftText, right: rightText, options: DiffOptions(whitespace: arguments.whitespace, ignoreCase: arguments.ignoreCase))
-        let statistics = diff.statistics
-        if statistics.isIdentical {
-            try write("The files are the same.\n", to: arguments.output)
-            return 0
-        }
-        try write("The files differ: \(statistics.added) added, \(statistics.removed) removed, \(statistics.changed) changed lines in \(diff.hunks.count) changes.\n", to: arguments.output)
-        return 1
-    default:
+    guard case let (.text(leftText, _), .text(rightText, _)) = (a.body, b.body) else {
         let same = try Data(contentsOf: left) == Data(contentsOf: right)
-        try write(same ? "The files are the same.\n" : "The files differ (compared byte for byte).\n", to: arguments.output)
+        if !same { try write("Binary files \(arguments.paths[0]) and \(arguments.paths[1]) differ\n", to: arguments.output) }
         return same ? 0 : 1
     }
+
+    let options = DiffOptions(whitespace: arguments.whitespace, ignoreCase: arguments.ignoreCase)
+    let diff = LineDiff(left: leftText, right: rightText, options: options)
+    if diff.statistics.isIdentical { return 0 }
+
+    switch arguments.format {
+    case .text:
+        // The patch always holds the exact text, so applying it gives the right file back.
+        try write(UnifiedDiff.patch(from: leftText, to: rightText, leftLabel: arguments.paths[0], rightLabel: arguments.paths[1]), to: arguments.output)
+    case .html:
+        let page = HTMLReport.page(
+            for: diff,
+            left: HTMLReport.Side(title: left.lastPathComponent, detail: arguments.paths[0]),
+            right: HTMLReport.Side(title: right.lastPathComponent, detail: arguments.paths[1]),
+            context: arguments.onlyDifferences ? 3 : nil,
+            generated: Date.now.formatted(date: .long, time: .shortened)
+        )
+        try write(page, to: arguments.output)
+    case .json:
+        let statistics = diff.statistics
+        let summary: [String: Int] = ["added": statistics.added, "removed": statistics.removed, "changed": statistics.changed, "changes": diff.hunks.count]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try write(String(decoding: try encoder.encode(summary), as: UTF8.self) + "\n", to: arguments.output)
+    }
+    return 1
 }
 
 func describe(_ action: FolderSync.Action) -> String {
