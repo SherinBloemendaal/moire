@@ -6,6 +6,8 @@ struct FolderView: View {
     @Bindable var model: FolderModel
     /// Opens a pair of files in the text comparison. A missing side is `nil`.
     var openFiles: (URL?, URL?) -> Void
+    /// Opens copies of files from a server, read-only.
+    var openDownloaded: ((url: URL, origin: String)?, (url: URL, origin: String)?) -> Void
     @State private var selection: Set<Int> = []
     @State private var syncItems: [Int]?
     @State private var showsFilters = false
@@ -81,12 +83,19 @@ struct FolderView: View {
     private func perform(_ action: FolderItemAction) {
         switch action {
         case .open(let item):
-            // Files on a server are not downloaded for the text comparison.
-            guard model.canOpen(item) else {
-                NSSound.beep()
+            guard !model.canOpen(item) else {
+                openFiles(model.url(of: item, on: .left), model.url(of: item, on: .right))
                 return
             }
-            openFiles(model.url(of: item, on: .left), model.url(of: item, on: .right))
+            // A file on a server is downloaded to a temporary folder and shown read-only.
+            Task {
+                do {
+                    let (left, right) = try await model.filesForComparison(item)
+                    openDownloaded(left, right)
+                } catch {
+                    model.errorMessage = "Could not download the file: \(error.localizedDescription)"
+                }
+            }
         case .showInFinder(let items, let side):
             model.showInFinder(items, side: side)
         case .trash(let items, let side):
@@ -102,20 +111,30 @@ struct FolderView: View {
     private var placeholder: some View {
         ZStack {
             MoireBackground(opacity: 0.22)
-            VStack(spacing: 10) {
-                Image(systemName: "folder.badge.questionmark")
-                    .font(.system(size: 36))
-                    .foregroundStyle(Theme.brand)
-                Text("Choose or drop two folders")
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                Text("Moire compares every file in them, on all cores. Double-click a file to see what changed.")
-                    .foregroundStyle(.secondary)
-                Text("Folders on a server work too: SFTP, FTP, FTPS and S3, from the server button on a card.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            if !model.unpacking.isEmpty {
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.large)
+                    Text("Unpacking \(model.unpacking.joined(separator: " and "))…")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                }
+                .padding(30)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Theme.brand)
+                    Text("Choose or drop two folders")
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    Text("Moire compares every file in them, on all cores. Double-click a file to see what changed.")
+                        .foregroundStyle(.secondary)
+                    Text("Folders on a server work too: SFTP, FTP, FTPS and S3, from the server button on a card.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(30)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
             }
-            .padding(30)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -303,7 +322,9 @@ private struct FolderCard: View {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 1.5)
                                     .background(Theme.cyan.opacity(0.14), in: Capsule())
-                                    .help("Compared by size and date unless you pick another method: reading every file over the network is slow.")
+                                    .help(archive(location) != nil
+                                        ? "Unpacked into a temporary folder for this comparison, and removed again afterwards."
+                                        : "Compared by size and date unless you pick another method: reading every file over the network is slow.")
                             }
                         }
                         Text(subtitle(location))
@@ -360,13 +381,20 @@ private struct FolderCard: View {
         } isTargeted: { isTargeted = $0 }
     }
 
+    /// The archive a local side was unpacked from, if it was.
+    private func archive(_ location: FolderLocation?) -> URL? {
+        location?.localURL.flatMap { model.archiveOrigins[$0] }
+    }
+
     private func icon(_ location: FolderLocation?, _ volume: Volume?) -> String {
         if location?.remote != nil { return "server.rack" }
+        if archive(location) != nil { return "doc.zipper" }
         return volume?.isLocal == false ? "network" : "folder.fill"
     }
 
     private func title(_ location: FolderLocation?) -> String {
-        switch location {
+        if let archive = archive(location) { return archive.lastPathComponent }
+        return switch location {
         case .local(let url): url.lastPathComponent
         case .remote(let remote): remote.name
         case nil: "Choose the \(side.name.lowercased()) folder…"
@@ -374,7 +402,10 @@ private struct FolderCard: View {
     }
 
     private func subtitle(_ location: FolderLocation?) -> String {
-        switch location {
+        if let archive = archive(location) {
+            return (archive.deletingLastPathComponent().path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
+        }
+        return switch location {
         case .local(let url): (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
         case .remote(let remote): remote.displayName
         case nil: "Click, or drop a folder here"
@@ -383,6 +414,7 @@ private struct FolderCard: View {
 
     private func badge(_ location: FolderLocation?, _ volume: Volume?) -> String? {
         if let remote = location?.remote { return remote.scheme.title }
+        if archive(location) != nil { return "Archive" }
         if let volume, !volume.isLocal { return "Network disk" }
         return nil
     }

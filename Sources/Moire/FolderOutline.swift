@@ -322,8 +322,8 @@ struct FolderOutline: NSViewRepresentable {
             }
 
             if items.count == 1, !tree.isDirectory(items[0]) {
-                let openable = SideID.allCases.allSatisfy { !exists(items[0], $0) || isLocal($0) }
-                add(openable ? "Compare Files" : "Compare Files (not for files on a server)", .open(items[0]), enabled: openable)
+                let local = SideID.allCases.allSatisfy { !exists(items[0], $0) || isLocal($0) }
+                add(local ? "Compare Files" : "Compare Files (downloads a read-only copy)", .open(items[0]))
                 menu.addItem(.separator())
             }
             add("Sync…", .sync(items), enabled: isLocal(.left) && isLocal(.right))

@@ -29,6 +29,9 @@ struct Side {
 
     var title: String { url?.lastPathComponent ?? "Untitled" }
 
+    /// Where a downloaded copy came from, e.g. `sftp://host/srv/app`; shown instead of its temporary folder.
+    var origin: String?
+
     var subtitle: String {
         if case .binary(let data) = content {
             return "Binary · " + ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
@@ -40,7 +43,7 @@ struct Side {
         case .crlf: "CRLF"
         case .cr: "CR"
         }
-        let location = url.map { ($0.deletingLastPathComponent().path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath } ?? "Typed or pasted"
+        let location = origin ?? url.map { ($0.deletingLastPathComponent().path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath } ?? "Typed or pasted"
         return "\(location) · \(lines) · \(encoding.name) · \(ending)"
     }
 }
@@ -155,8 +158,17 @@ final class CompareModel {
         }
     }
 
+    /// Shows copies downloaded from a server, read-only: there is nowhere to save them back to.
+    func openDownloaded(left: (url: URL, origin: String)?, right: (url: URL, origin: String)?) {
+        openPair(left: left?.url, right: right?.url)
+        self.left.origin = left?.origin
+        self.right.origin = right?.origin
+        isReadOnly = true
+    }
+
     func load(_ url: URL, into side: SideID) {
         guard canReplace(side) else { return }
+        isReadOnly = false
         do {
             let file = try FileContent.read(url)
             var new = Side(url: url)

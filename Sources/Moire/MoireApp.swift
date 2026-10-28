@@ -92,13 +92,19 @@ final class AppState {
     /// Unpacks archives (a side may also be a folder) and compares them in the folder comparison.
     func openArchives(left: URL?, right: URL?) {
         compare.fileView.isOpeningArchives = true
+        folders.unpacking = [left, right].compactMap { $0 }.filter(ArchiveRouter.isArchive).map(\.lastPathComponent)
         archives.open(left: left, right: right) { [weak self] message in
             guard let self else { return }
             compare.fileView.isOpeningArchives = false
+            folders.unpacking = []
             if mode == .folders { folders.errorMessage = message } else { compare.errorMessage = message }
         } done: { [weak self] left, right in
             guard let self else { return }
             compare.fileView.isOpeningArchives = false
+            folders.unpacking = []
+            for folder in [left, right].compactMap({ $0 }) {
+                if let archive = archives.archive(for: folder) { folders.archiveOrigins[folder] = archive }
+            }
             if let left { folders.left = left }
             if let right { folders.right = right }
             cameFromFolders = false
@@ -129,7 +135,11 @@ final class AppState {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Task.detached(priority: .background) { ArchiveExtractor.removeLeftovers() }
+        let downloads = FolderModel.downloads
+        Task.detached(priority: .background) {
+            ArchiveExtractor.removeLeftovers()
+            ArchiveExtractor.removeLeftovers(in: downloads)
+        }
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let flag = arguments.firstIndex(of: "--merge") {
             openMergetool(Array(arguments[(flag + 1)...]))

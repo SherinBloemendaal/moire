@@ -49,6 +49,11 @@ final class FolderModel {
         set { rightLocation = newValue.map(FolderLocation.local) }
     }
 
+    /// Archives being unpacked to be compared here, by name.
+    var unpacking: [String] = []
+    /// Unpacked archives shown here, by their temporary folder, so the cards show the archive.
+    var archiveOrigins: [URL: URL] = [:]
+
     func location(_ side: SideID) -> FolderLocation? { side == .left ? leftLocation : rightLocation }
 
     /// Files on this side can be opened, synced, renamed and moved to the Trash.
@@ -287,6 +292,48 @@ final class FolderModel {
         let info = side == .left ? tree.left(item) : tree.right(item)
         guard info.exists else { return nil }
         return root.appending(path: tree.path(of: item))
+    }
+
+    /// Where downloaded copies of remote files go; leftovers older than a day are removed at launch.
+    static var downloads: URL {
+        FileManager.default.temporaryDirectory.appending(path: "Moire Downloads", directoryHint: .isDirectory)
+    }
+
+    /// The largest remote file that is downloaded for the text comparison.
+    static let downloadLimit: Int64 = 1 << 30
+
+    /// The item's file on each side, downloading remote ones into a temporary folder. Local
+    /// files are used where they are. A side without the file is `nil`.
+    func filesForComparison(_ item: Int) async throws -> (left: (url: URL, origin: String)?, right: (url: URL, origin: String)?) {
+        guard let tree, item < tree.count else { return (nil, nil) }
+        let path = tree.path(of: item)
+        var result: [SideID: (url: URL, origin: String)] = [:]
+        for side in SideID.allCases {
+            let info = side == .left ? tree.left(item) : tree.right(item)
+            guard info.exists, let location = location(side) else { continue }
+            switch location {
+            case .local(let root):
+                let url = root.appending(path: path)
+                result[side] = (url, (url.deletingLastPathComponent().path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath)
+            case .remote(let remote):
+                guard info.size <= Self.downloadLimit else {
+                    throw CocoaError(.fileReadTooLarge, userInfo: [
+                        NSLocalizedDescriptionKey: "\(tree.name(of: item)) is \(ByteCountFormatter.string(fromByteCount: info.size, countStyle: .file)); files over 1 GB on a server are not downloaded for the text comparison.",
+                    ])
+                }
+                let makeSource = Self.sourceMaker(.remote(remote))
+                let folder = Self.downloads.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+                let destination = folder.appending(path: tree.name(of: item))
+                try await Task.detached(priority: .userInitiated) {
+                    let data = try makeSource().open(path).readAll()
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try data.write(to: destination)
+                }.value
+                let parent = (path as NSString).deletingLastPathComponent
+                result[side] = (destination, remote.displayName + (parent.isEmpty ? "" : "/" + parent))
+            }
+        }
+        return (result[.left], result[.right])
     }
 
     /// Every side the item exists on is a local file, so the text comparison can open it.

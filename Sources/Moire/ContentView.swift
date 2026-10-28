@@ -12,6 +12,10 @@ struct ContentView: View {
             case .folders:
                 FolderView(model: state.folders) { left, right in
                     state.openFromFolders(left: left, right: right)
+                } openDownloaded: { left, right in
+                    state.compare.openDownloaded(left: left, right: right)
+                    state.cameFromFolders = true
+                    withAnimation(.smooth(duration: 0.3)) { state.mode = .text }
                 }
                 .transition(.opacity)
             case .merge:
