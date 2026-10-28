@@ -192,6 +192,11 @@ final class CompareModel {
     /// The revisions of the sides that `diff` was worked out from.
     @ObservationIgnored private var diffRevisions = (0, 0)
 
+    @ObservationIgnored private var watchers: [SideID: FileWatcher] = [:]
+    /// How each file looked when it was read or saved, to tell a real change from our own save.
+    @ObservationIgnored private var diskSignatures: [SideID: FileSignature] = [:]
+    @ObservationIgnored private var isAskingToReload: Set<SideID> = []
+
     /// Goes up when a side is replaced as a whole.
     private(set) var replacements = 0
     /// The window's undo manager, set by the diff list.
@@ -234,20 +239,26 @@ final class CompareModel {
         }
     }
 
-    /// Reads the file off the main thread; a big file then does not stall the window.
-    func load(_ url: URL, into side: SideID) {
-        guard canReplace(side) else { return }
+    /// Reads the file off the main thread; a big file then does not stall the window. Unsaved
+    /// changes are only asked about when `askFirst` is set.
+    func load(_ url: URL, into side: SideID, askFirst: Bool = true) {
+        guard !askFirst || canReplace(side) else { return }
         loadTasks[side]?.cancel()
         isLoading = true
         loadTasks[side] = Task {
-            let result = await Task.detached(priority: .userInitiated) { Result { try FileContent.read(url) } }.value
+            let result = await Task.detached(priority: .userInitiated) {
+                // Taken before reading: a write during the read then still counts as a change.
+                let signature = FileSignature(url: url)
+                return Result { (try FileContent.read(url), signature) }
+            }.value
             guard !Task.isCancelled else { return }
             loadTasks[side] = nil
             isLoading = !loadTasks.isEmpty
             switch result {
-            case .success(let file):
+            case .success(let (file, signature)):
                 forgetEdits()
                 self[side] = Side(file: file)
+                diskSignatures[side] = signature
                 if hasBinarySide { isEditing = false }
             case .failure(let error):
                 errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
@@ -292,6 +303,7 @@ final class CompareModel {
 
     func swapSides() {
         forgetEdits()
+        diskSignatures = [.left: diskSignatures[.right], .right: diskSignatures[.left]].compactMapValues { $0 }
         let previous = left
         left = right
         right = previous
@@ -352,10 +364,49 @@ final class CompareModel {
             current.url = destination
             current.isDirty = false
             self[side] = current
+            // Our own save is not a change on disk to reload.
+            diskSignatures[side] = FileSignature(url: destination)
             return true
         } catch {
             errorMessage = "Could not save \(destination.lastPathComponent): \(error.localizedDescription)"
             return false
+        }
+    }
+
+    // MARK: Changes on disk
+
+    private func watch(_ side: SideID) {
+        watchers[side]?.stop()
+        watchers[side] = nil
+        guard let url = self[side].url else {
+            diskSignatures[side] = nil
+            return
+        }
+        watchers[side] = FileWatcher(url: url) { [weak self] in
+            self?.fileChangedOnDisk(side, url: url)
+        }
+    }
+
+    /// Reloads a side whose file was written by another app. A side with unsaved changes asks
+    /// first; keeping them is remembered until the file changes again.
+    private func fileChangedOnDisk(_ side: SideID, url: URL) {
+        guard self[side].url == url, !isAskingToReload.contains(side) else { return }
+        guard let signature = FileSignature(url: url), signature != diskSignatures[side] else { return }
+        guard self[side].isDirty else {
+            load(url, into: side, askFirst: false)
+            return
+        }
+        isAskingToReload.insert(side)
+        defer { isAskingToReload.remove(side) }
+        let alert = NSAlert()
+        alert.messageText = "\(url.lastPathComponent) changed on disk"
+        alert.informativeText = "Another app saved this file, but the \(side.name.lowercased()) side also has changes that are not saved yet. Reload it and lose your changes, or keep your version?"
+        alert.addButton(withTitle: "Keep Mine")
+        alert.addButton(withTitle: "Reload")
+        if alert.runModal() == .alertSecondButtonReturn {
+            load(url, into: side, askFirst: false)
+        } else {
+            diskSignatures[side] = FileSignature(url: url)
         }
     }
 
@@ -475,6 +526,7 @@ final class CompareModel {
         guard oldValue.revision != newValue.revision || oldValue.url != newValue.url else { return }
         // A side read from disk or pasted gets new colors; an edit keeps what still holds.
         if isReplacement(of: oldValue, by: newValue) { resetHighlighter(side) }
+        if oldValue.url != newValue.url { watch(side) }
         // Typing recomputes after a short pause; opening or merging recomputes right away.
         scheduleDiff(delay: isEditing || isTyping ? .milliseconds(150) : .zero)
     }
