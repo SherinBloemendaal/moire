@@ -3,6 +3,32 @@ import MoireKit
 import os
 import SwiftUI
 
+/// One side of a folder comparison: a folder on this Mac or one on a server.
+enum FolderLocation: Hashable {
+    case local(URL)
+    case remote(RemoteLocation)
+
+    var localURL: URL? {
+        if case .local(let url) = self { url } else { nil }
+    }
+
+    var remote: RemoteLocation? {
+        if case .remote(let location) = self { location } else { nil }
+    }
+
+    /// Known without connecting, so the method can be picked before anything is read.
+    var remoteVolume: Volume? {
+        guard let remote else { return nil }
+        let fileSystem = switch remote.scheme {
+        case .sftp: "sftp"
+        case .ftp: "ftp"
+        case .ftps, .ftpes: "ftps"
+        case .s3: "s3"
+        }
+        return Volume(fileSystem: fileSystem, isLocal: false)
+    }
+}
+
 @Observable
 final class FolderModel {
     enum Filter: String, CaseIterable {
@@ -10,8 +36,26 @@ final class FolderModel {
         case differences
     }
 
-    var left: URL? { didSet { if left != oldValue { foldersChanged() } } }
-    var right: URL? { didSet { if right != oldValue { foldersChanged() } } }
+    var leftLocation: FolderLocation? { didSet { if leftLocation != oldValue { foldersChanged() } } }
+    var rightLocation: FolderLocation? { didSet { if rightLocation != oldValue { foldersChanged() } } }
+
+    /// The local folders. Setting one replaces whatever that side had, remote or not.
+    var left: URL? {
+        get { leftLocation?.localURL }
+        set { leftLocation = newValue.map(FolderLocation.local) }
+    }
+    var right: URL? {
+        get { rightLocation?.localURL }
+        set { rightLocation = newValue.map(FolderLocation.local) }
+    }
+
+    func location(_ side: SideID) -> FolderLocation? { side == .left ? leftLocation : rightLocation }
+
+    /// Files on this side can be opened, synced, renamed and moved to the Trash.
+    func isLocal(_ side: SideID) -> Bool { location(side)?.localURL != nil }
+
+    var hasBothSides: Bool { leftLocation != nil && rightLocation != nil }
+    var canSync: Bool { isLocal(.left) && isLocal(.right) }
 
     /// Chosen per pair of folders: metadata only on a network disk, otherwise the user's choice.
     var method: CompareMethod = .binary {
@@ -99,6 +143,10 @@ final class FolderModel {
         if side == .left { left = url } else { right = url }
     }
 
+    func set(_ location: RemoteLocation, on side: SideID) {
+        if side == .left { leftLocation = .remote(location) } else { rightLocation = .remote(location) }
+    }
+
     /// Takes dropped folders: two fill both sides, one fills the first empty side.
     func open(_ urls: [URL]) {
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
@@ -111,9 +159,9 @@ final class FolderModel {
     }
 
     func swapSides() {
-        let previous = left
-        left = right
-        right = previous
+        let previous = leftLocation
+        leftLocation = rightLocation
+        rightLocation = previous
     }
 
     func refresh() { compareIfReady() }
@@ -125,8 +173,8 @@ final class FolderModel {
     }
 
     private func foldersChanged() {
-        leftVolume = left.flatMap { try? Volume.of($0.path(percentEncoded: false)) }
-        rightVolume = right.flatMap { try? Volume.of($0.path(percentEncoded: false)) }
+        leftVolume = leftLocation.flatMap(Self.volume)
+        rightVolume = rightLocation.flatMap(Self.volume)
         let start = if let leftVolume, let rightVolume {
             FolderCompareSettings.defaultMethod(left: leftVolume, right: rightVolume, otherwise: preferredMethod)
         } else {
@@ -139,6 +187,23 @@ final class FolderModel {
         }
     }
 
+    private static func volume(_ location: FolderLocation) -> Volume? {
+        if let url = location.localURL { return try? Volume.of(url.path(percentEncoded: false)) }
+        return location.remoteVolume
+    }
+
+    /// Makes the source for one side when the comparison starts, off the main thread. The FTP
+    /// password is read from the Keychain here, on the main thread, before that.
+    private static func sourceMaker(_ location: FolderLocation) -> @Sendable () throws -> any FolderSource {
+        switch location {
+        case .local(let url):
+            return { try LocalSource(url) }
+        case .remote(let remote):
+            let password = remote.scheme.isFTP ? ServerKeychain.password(for: remote) : nil
+            return { try remote.makeSource(password: password) }
+        }
+    }
+
     /// The user picked a method: remember it for local folders.
     func pick(_ method: CompareMethod) {
         if !isOnNetwork { preferredMethod = method }
@@ -148,7 +213,7 @@ final class FolderModel {
     private func compareIfReady() {
         engine?.cancel()
         refreshTask?.cancel()
-        guard let left, let right else {
+        guard let leftLocation, let rightLocation else {
             show(nil)
             progress = nil
             isComparing = false
@@ -156,8 +221,15 @@ final class FolderModel {
         }
 
         let settings = settings
-        let cache = settings.method == .metadata ? nil : ResultCache(file: ResultCache.file(left: left, right: right, settings: settings))
-        let engine = FolderEngine(left: left, right: right, settings: settings, cache: cache)
+        // Remote files have no file IDs to key results by, so only two local folders get a cache.
+        let cache: ResultCache? = if settings.method != .metadata, let left = leftLocation.localURL, let right = rightLocation.localURL {
+            ResultCache(file: ResultCache.file(left: left, right: right, settings: settings))
+        } else {
+            nil
+        }
+        let makeLeft = Self.sourceMaker(leftLocation)
+        let makeRight = Self.sourceMaker(rightLocation)
+        let engine = FolderEngine(sources: { (try makeLeft(), try makeRight()) }, settings: settings, cache: cache)
         self.engine = engine
         isComparing = true
         startedAt = Date()
@@ -215,6 +287,15 @@ final class FolderModel {
         let info = side == .left ? tree.left(item) : tree.right(item)
         guard info.exists else { return nil }
         return root.appending(path: tree.path(of: item))
+    }
+
+    /// Every side the item exists on is a local file, so the text comparison can open it.
+    func canOpen(_ item: Int) -> Bool {
+        guard let tree, item < tree.count else { return false }
+        for side in SideID.allCases where (side == .left ? tree.left(item) : tree.right(item)).exists {
+            if !isLocal(side) { return false }
+        }
+        return true
     }
 
     func showInFinder(_ items: [Int], side: SideID) {
@@ -284,7 +365,7 @@ final class FolderModel {
     // MARK: Sync
 
     func plan(mode: FolderSync.Mode, direction: FolderSync.Direction, selection: Set<Int>) -> FolderSync.Plan? {
-        guard let tree, !isComparing else { return nil }
+        guard let tree, !isComparing, canSync else { return nil }
         return FolderSync.plan(tree, mode: mode, direction: direction, settings: settings, selection: selection)
     }
 
