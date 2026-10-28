@@ -8,7 +8,7 @@ public enum UnifiedDiff {
     public static func patch(from left: TextDocument, to right: TextDocument, leftLabel: String, rightLabel: String, context: Int = 3) -> String {
         let oldLines = left.textLines
         let newLines = right.textLines
-        var interner = LineInterner()
+        var interner = TextLineInterner()
         let operations = Myers.diff(interner.ids(for: oldLines), interner.ids(for: newLines))
 
         struct Step {

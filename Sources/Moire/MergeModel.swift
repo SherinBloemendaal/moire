@@ -49,7 +49,7 @@ extension ThreeWayMerge.Version {
 
 /// What the merge panes show: a line of an unchanged run, a block for every chunk that
 /// changed, or a run of unchanged lines folded away.
-struct ScrollRequest: Equatable {
+struct MergeScrollRequest: Equatable {
     var chunk: Int
     var serial: Int
 }
@@ -74,7 +74,7 @@ final class MergeModel {
     var currentChunk: Int?
     /// Asks both panes to scroll to a chunk. A new serial number makes every request count, also
     /// a second one for the same chunk.
-    private(set) var scrollRequest = ScrollRequest(chunk: 0, serial: 0)
+    private(set) var scrollRequest = MergeScrollRequest(chunk: 0, serial: 0)
     /// The chunk whose result is being typed by hand.
     var editingChunk: Int?
     var editDraft = ""
@@ -330,7 +330,7 @@ final class MergeModel {
 
     func select(_ chunk: Int) {
         currentChunk = chunk
-        scrollRequest = ScrollRequest(chunk: chunk, serial: scrollRequest.serial + 1)
+        scrollRequest = MergeScrollRequest(chunk: chunk, serial: scrollRequest.serial + 1)
     }
 
     /// The position of a conflict among all conflicts, counting from 1.

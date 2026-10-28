@@ -19,16 +19,52 @@ public enum Myers {
         let inA = Set(a)
         let aKept = a.indices.filter { inB.contains(a[$0]) }
         let bKept = b.indices.filter { inA.contains(b[$0]) }
-        let reducedA = aKept.map { a[$0] }
-        let reducedB = bKept.map { b[$0] }
+        return solve(aKept.map { a[$0] }, bKept.map { b[$0] }, aKept: aKept, bKept: bKept, aCount: a.count, bCount: b.count)
+    }
 
+    /// The same as `diff` for numbers from `LineInterner`, which are below `marks.idCount`.
+    /// The marks replace the two sets, which matters for millions of lines.
+    static func diff(ids a: ArraySlice<Int>, _ b: ArraySlice<Int>, marks: inout InternedMarks) -> [EditOperation] {
+        let stamp = marks.nextStamp()
+        for id in a { marks.inA[id] = stamp }
+        for id in b { marks.inB[id] = stamp }
+        var aKept: [Int] = []
+        var bKept: [Int] = []
+        aKept.reserveCapacity(a.count)
+        bKept.reserveCapacity(b.count)
+        for (offset, id) in a.enumerated() where marks.inB[id] == stamp { aKept.append(offset) }
+        for (offset, id) in b.enumerated() where marks.inA[id] == stamp { bKept.append(offset) }
+        let reducedA = aKept.map { a[a.startIndex + $0] }
+        let reducedB = bKept.map { b[b.startIndex + $0] }
+        return solve(reducedA, reducedB, aKept: aKept, bKept: bKept, aCount: a.count, bCount: b.count)
+    }
+
+    /// Which ids occur in the current part of each side, without clearing between parts.
+    struct InternedMarks {
+        var inA: [Int32]
+        var inB: [Int32]
+        private var stamp: Int32 = 0
+
+        init(idCount: Int) {
+            inA = [Int32](repeating: -1, count: idCount)
+            inB = [Int32](repeating: -1, count: idCount)
+        }
+
+        mutating func nextStamp() -> Int32 {
+            stamp += 1
+            return stamp
+        }
+    }
+
+    /// Diffs the reduced sequences and puts the left-out elements back as deletes and inserts.
+    private static func solve<Element: Equatable>(_ reducedA: [Element], _ reducedB: [Element], aKept: [Int], bKept: [Int], aCount: Int, bCount: Int) -> [EditOperation] {
         var reduced: [EditOperation] = []
         reduced.reserveCapacity(max(reducedA.count, reducedB.count))
         var solver = Solver(a: reducedA, b: reducedB)
         solver.solve(aLow: 0, aHigh: reducedA.count, bLow: 0, bHigh: reducedB.count, into: &reduced)
 
         var operations: [EditOperation] = []
-        operations.reserveCapacity(a.count + b.count)
+        operations.reserveCapacity(aCount + bCount)
         var i = 0, j = 0, ai = 0, bi = 0
         func skipA(to end: Int) {
             operations.append(contentsOf: repeatElement(.delete, count: end - i))
@@ -55,8 +91,8 @@ public enum Myers {
                 j += 1; bi += 1
             }
         }
-        skipA(to: a.count)
-        skipB(to: b.count)
+        skipA(to: aCount)
+        skipB(to: bCount)
         return normalized(operations)
     }
 
@@ -123,14 +159,17 @@ public enum Myers {
 
         /// Runs the forward and the reverse search at the same time until they overlap, and
         /// returns the absolute point where they meet. `nil` means the ranges share nothing.
+        ///
+        /// The diagonal arrays start small and grow with the search, so two long ranges that
+        /// differ in a few places do not pay for arrays the size of both ranges.
         private func middleSnake(aLow: Int, aHigh: Int, bLow: Int, bHigh: Int) -> (Int, Int)? {
             let n = aHigh - aLow
             let m = bHigh - bLow
             let maxD = (n + m + 1) / 2
-            let offset = maxD
-            let length = 2 * maxD + 2
-            var forward = [Int](repeating: -1, count: length)
-            var reverse = [Int](repeating: -1, count: length)
+            var radius = min(maxD + 1, 256)
+            var offset = radius
+            var forward = [Int](repeating: -1, count: 2 * radius + 1)
+            var reverse = [Int](repeating: -1, count: 2 * radius + 1)
             forward[offset + 1] = 0
             reverse[offset + 1] = 0
             let delta = n - m
@@ -139,6 +178,20 @@ public enum Myers {
             var k1Start = 0, k1End = 0, k2Start = 0, k2End = 0
 
             for d in 0..<maxD {
+                if d + 1 > radius {
+                    let newRadius = min(maxD + 1, radius * 2)
+                    var newForward = [Int](repeating: -1, count: 2 * newRadius + 1)
+                    var newReverse = [Int](repeating: -1, count: 2 * newRadius + 1)
+                    let shift = newRadius - radius
+                    newForward.replaceSubrange(shift..<(shift + forward.count), with: forward)
+                    newReverse.replaceSubrange(shift..<(shift + reverse.count), with: reverse)
+                    forward = newForward
+                    reverse = newReverse
+                    radius = newRadius
+                    offset = newRadius
+                }
+                let length = forward.count
+
                 var k1 = -d + k1Start
                 while k1 <= d - k1End {
                     let index = offset + k1

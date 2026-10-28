@@ -22,6 +22,13 @@ public struct TextEncoding: Sendable, Hashable {
         }
     }
 
+    /// The document in this encoding. UTF-8 is written straight from the lines.
+    public func encode(_ document: TextDocument) throws -> Data {
+        guard encoding == .utf8 else { return try encode(document.text) }
+        let body = Data(document.utf8)
+        return byteOrderMark ? Data([0xEF, 0xBB, 0xBF]) + body : body
+    }
+
     public func encode(_ text: String) throws -> Data {
         guard let body = text.data(using: encoding, allowLossyConversion: false) else {
             throw EncodingError.cannotEncode(name)
@@ -62,32 +69,99 @@ public struct FileContent: Sendable {
         self.body = body
     }
 
+    /// Reads the whole file into one block of memory, which a text file then keeps as its lines,
+    /// so a big file is not copied again on the way in.
     public static func read(_ url: URL) throws -> FileContent {
-        FileContent(url: url, body: decode(try Data(contentsOf: url)))
+        let descriptor = open(url.path(percentEncoded: false), O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            let code = errno
+            let kind: CocoaError.Code = switch code {
+            case ENOENT, ENOTDIR: .fileReadNoSuchFile
+            case EACCES, EPERM: .fileReadNoPermission
+            default: .fileReadUnknown
+            }
+            throw CocoaError(kind, userInfo: [NSURLErrorKey: url, NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)])
+        }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+
+        var capacity = max(Int(info.st_size), 0) + 1
+        var allocation = UnsafeMutableRawBufferPointer.allocate(byteCount: capacity, alignment: 16)
+        var count = 0
+        while true {
+            if count == capacity {
+                // The file grew while it was read.
+                let larger = UnsafeMutableRawBufferPointer.allocate(byteCount: capacity * 2, alignment: 16)
+                larger.copyMemory(from: UnsafeRawBufferPointer(allocation))
+                allocation.deallocate()
+                allocation = larger
+                capacity *= 2
+            }
+            guard let base = allocation.baseAddress else { break }
+            let result = Darwin.read(descriptor, base + count, capacity - count)
+            if result < 0 {
+                if errno == EINTR { continue }
+                allocation.deallocate()
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if result == 0 { break }
+            count += result
+        }
+        return FileContent(url: url, body: decode(taking: allocation, count: count))
     }
 
     /// UTF-8 or UTF-16 with a byte order mark, then UTF-8, then Latin-1 for older files. Data
     /// without a byte order mark and with a NUL byte in its first 8 KB is binary.
     public static func decode(_ data: Data) -> Body {
-        let marked: [([UInt8], String.Encoding)] = [
-            ([0xEF, 0xBB, 0xBF], .utf8),
-            ([0xFF, 0xFE], .utf16LittleEndian),
-            ([0xFE, 0xFF], .utf16BigEndian),
-        ]
-        for (mark, encoding) in marked where data.starts(with: mark) {
-            if let text = String(data: data.dropFirst(mark.count), encoding: encoding) {
+        let allocation = UnsafeMutableRawBufferPointer.allocate(byteCount: max(data.count, 1), alignment: 16)
+        data.withUnsafeBytes { bytes in
+            if let source = bytes.baseAddress, let destination = allocation.baseAddress {
+                destination.copyMemory(from: source, byteCount: bytes.count)
+            }
+        }
+        return decode(taking: allocation, count: data.count)
+    }
+
+    /// Decodes the first `count` bytes of `allocation` and takes it over: the lines of a UTF-8
+    /// file point straight into it.
+    static func decode(taking allocation: UnsafeMutableRawBufferPointer, count: Int) -> Body {
+        let bytes = UnsafeBufferPointer(start: allocation.baseAddress?.assumingMemoryBound(to: UInt8.self), count: count)
+        func data(from offset: Int = 0) -> Data {
+            Data(UnsafeBufferPointer(rebasing: bytes[offset...]))
+        }
+
+        if bytes.starts(with: [0xEF, 0xBB, 0xBF]), UTF8Validation.isValid(UnsafeBufferPointer(rebasing: bytes[3...])) {
+            return .text(TextDocument(LineBuffer(taking: allocation, offset: 3, count: count - 3)), TextEncoding(encoding: .utf8, byteOrderMark: true))
+        }
+        for (mark, encoding) in [([UInt8]([0xFF, 0xFE]), String.Encoding.utf16LittleEndian), ([0xFE, 0xFF], .utf16BigEndian)] where bytes.starts(with: mark) {
+            if let text = String(data: data(from: 2), encoding: encoding) {
+                allocation.deallocate()
                 return .text(TextDocument(text), TextEncoding(encoding: encoding, byteOrderMark: true))
             }
         }
-        if data.prefix(8192).contains(0) {
-            return .binary(data)
+        if UnsafeBufferPointer(rebasing: bytes.prefix(8192)).contains(0) {
+            defer { allocation.deallocate() }
+            return .binary(data())
         }
-        if let text = String(data: data, encoding: .utf8) {
-            return .text(TextDocument(text), .utf8)
+        if UTF8Validation.isValid(bytes) {
+            return .text(TextDocument(LineBuffer(taking: allocation, count: count)), .utf8)
         }
-        if let text = String(data: data, encoding: .isoLatin1) {
-            return .text(TextDocument(text), TextEncoding(encoding: .isoLatin1, byteOrderMark: false))
+        // Every byte is a character in Latin-1, so this always works.
+        defer { allocation.deallocate() }
+        let extra = bytes.count { $0 >= 0x80 }
+        let converted = UnsafeMutableRawBufferPointer.allocate(byteCount: max(count + extra, 1), alignment: 16)
+        var index = 0
+        for byte in bytes {
+            if byte < 0x80 {
+                converted[index] = byte
+                index += 1
+            } else {
+                converted[index] = 0xC0 | (byte >> 6)
+                converted[index + 1] = 0x80 | (byte & 0x3F)
+                index += 2
+            }
         }
-        return .binary(data)
+        return .text(TextDocument(LineBuffer(taking: converted, count: index)), TextEncoding(encoding: .isoLatin1, byteOrderMark: false))
     }
 }

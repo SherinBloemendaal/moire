@@ -23,8 +23,9 @@ extension TextDocument {
     }
 }
 
-/// Gives every distinct line a small integer, so Myers compares integers instead of strings.
-struct LineInterner {
+/// Gives every distinct line (its line ending included) a small integer, so Myers compares
+/// integers instead of strings. Used by the three-way merge and patches.
+struct TextLineInterner {
     private var ids: [TextLine: Int] = [:]
 
     mutating func ids(for lines: [TextLine]) -> [Int] {

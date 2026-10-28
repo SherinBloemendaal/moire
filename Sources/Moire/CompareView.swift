@@ -9,7 +9,11 @@ struct CompareView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.isEmpty && !model.isEditing {
-                EmptyCompareView(model: model, compareFolders: compareFolders)
+                if model.isLoading {
+                    ProgressView("Reading the files…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    EmptyCompareView(model: model, compareFolders: compareFolders)
+                }
             } else {
                 header
                     .padding(.horizontal, 14)
@@ -29,6 +33,9 @@ struct CompareView: View {
             }
         }
         .background(Theme.window)
+        .sheet(isPresented: $model.isGoToLineVisible) {
+            GoToLineView(model: model)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -70,13 +77,17 @@ struct CompareView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if model.hasBinarySide {
             BinaryComparisonView(left: model.left, right: model.right)
-        } else if let diff = model.diff {
-            if diff.statistics.isIdentical, !diff.rows.isEmpty, model.onlyChanges {
-                IdenticalView(lineCount: diff.rows.count, showAll: { model.onlyChanges = false })
+        } else if let display = model.display {
+            let diff = display.diff
+            if diff.statistics.isIdentical, diff.rowCount > 0, model.onlyChanges {
+                IdenticalView(lineCount: diff.rowCount, showAll: { model.onlyChanges = false })
             } else {
-                HStack(spacing: 0) {
-                    DiffListView(model: model, diff: diff)
-                    ChangeMap(model: model, diff: diff)
+                VStack(spacing: 0) {
+                    if model.isSearchVisible {
+                        FindBar(model: model)
+                        Rectangle().fill(Theme.paneBorder).frame(height: 1)
+                    }
+                    DiffPane(model: model, display: display)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
@@ -156,29 +167,46 @@ private struct SideCard: View {
     }
 }
 
+/// The whole text of one side in a plain editor. It keeps its own copy of the text, so typing
+/// does not join the document into one string on every key.
 private struct EditorPane: View {
     @Bindable var model: CompareModel
     let side: SideID
+    @State private var text = ""
+    /// What was last read from the model, or written to it.
+    @State private var synced: (text: String, revision: Int)?
 
     var body: some View {
-        TextEditor(text: Binding(
-            get: { model[side].text },
-            set: { model.setText($0, on: side) }
-        ))
-        .font(Theme.code(size: model.fontSize))
-        .scrollContentBackground(.hidden)
-        .autocorrectionDisabled()
-        .padding(10)
-        .overlay(alignment: .topLeading) {
-            if model[side].text.isEmpty {
-                Text("Type or paste the \(side.name.lowercased()) text")
-                    .font(Theme.code(size: model.fontSize))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 15)
-                    .padding(.vertical, 10)
-                    .allowsHitTesting(false)
+        TextEditor(text: $text)
+            .font(Theme.code(size: model.fontSize))
+            .scrollContentBackground(.hidden)
+            .autocorrectionDisabled()
+            .padding(10)
+            .overlay(alignment: .topLeading) {
+                if text.isEmpty {
+                    Text("Type or paste the \(side.name.lowercased()) text")
+                        .font(Theme.code(size: model.fontSize))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 10)
+                        .allowsHitTesting(false)
+                }
             }
-        }
+            .onAppear { pull() }
+            .onChange(of: model[side].revision) { _, revision in
+                if revision != synced?.revision { pull() }
+            }
+            .onChange(of: text) { _, new in
+                guard new != synced?.text else { return }
+                model.setText(new, on: side)
+                synced = (new, model[side].revision)
+            }
+    }
+
+    private func pull() {
+        let current = model[side].text
+        synced = (current, model[side].revision)
+        text = current
     }
 }
 
@@ -196,7 +224,7 @@ private struct StatusBar: View {
                     Chip(text: "\(statistics.changed) changed", color: Theme.changed)
                 }
             }
-            if model.isComputing {
+            if model.isComputing || model.isLoading {
                 ProgressView().controlSize(.mini)
             }
 
@@ -256,7 +284,10 @@ private struct BinaryComparisonView: View {
     let right: Side
 
     var body: some View {
-        let identical = left.content == right.content
+        let identical = switch (left.content, right.content) {
+        case (.binary(let a), .binary(let b)): a == b
+        default: false
+        }
         VStack(spacing: 14) {
             Image(systemName: identical ? "checkmark.seal.fill" : "doc.zipper")
                 .font(.system(size: 40))
@@ -276,7 +307,7 @@ private struct BinaryComparisonView: View {
     private func size(of side: Side, label: String) -> some View {
         let bytes: Int64 = switch side.content {
         case .binary(let data): Int64(data.count)
-        case .text(let text): Int64(text.utf8.count)
+        case .text(let document): Int64(document.utf8.count)
         }
         return VStack(spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
@@ -376,5 +407,27 @@ struct GlassButtonStyle: ButtonStyle {
             .overlay(Capsule().strokeBorder(Theme.paneBorder))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+/// The aligned lines with the change map beside them, for any comparison model.
+struct DiffPane: View {
+    let model: CompareModel
+    let display: DiffDisplay
+
+    var body: some View {
+        HStack(spacing: 0) {
+            DiffListView(model: model, display: display, state: DiffListState(
+                generation: model.displayGeneration,
+                replacements: model.replacements,
+                currentHunk: model.currentHunk,
+                fontSize: model.fontSize,
+                scrollRequest: model.scrollRequest,
+                searchGeneration: model.searchGeneration,
+                flashedLine: model.flashedLine,
+                alignmentMarks: model.alignmentMarks
+            ))
+            ChangeMap(model: model, diff: display.diff)
+        }
     }
 }

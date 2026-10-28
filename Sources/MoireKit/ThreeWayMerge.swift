@@ -80,7 +80,7 @@ public struct ThreeWayMerge: Sendable {
         self.right = right.textLines
         lineEnding = [left, right, base].first { !$0.lines.isEmpty }?.lineEnding ?? left.lineEnding
 
-        var interner = LineInterner()
+        var interner = TextLineInterner()
         let baseIDs = interner.ids(for: self.base)
         let leftIDs = interner.ids(for: self.left)
         let rightIDs = interner.ids(for: self.right)

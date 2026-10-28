@@ -191,3 +191,137 @@ struct FileContentTests {
         }
     }
 }
+
+/// The hunks of the plain generic Myers over whole lines, as a reference for `LineDiff`.
+private func referenceHunks(_ left: [String], _ right: [String]) -> [Hunk] {
+    var hunks: [Hunk] = []
+    var l = 0
+    var r = 0
+    var deleted = 0
+    var inserted = 0
+    func flush() {
+        if deleted + inserted > 0 { hunks.append(Hunk(left: (l - deleted)..<l, right: (r - inserted)..<r)) }
+        deleted = 0
+        inserted = 0
+    }
+    for operation in Myers.diff(left, right) {
+        switch operation {
+        case .equal:
+            flush()
+            l += 1
+            r += 1
+        case .delete:
+            deleted += 1
+            l += 1
+        case .insert:
+            inserted += 1
+            r += 1
+        }
+    }
+    flush()
+    return hunks
+}
+
+struct LineDiffRowTests {
+    @Test func `finds the same hunks as Myers on whole lines`() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<300 {
+            let left = (0..<Int.random(in: 0...30, using: &generator)).map { _ in "line \(Int.random(in: 0...6, using: &generator))" }
+            let right = (0..<Int.random(in: 0...30, using: &generator)).map { _ in "line \(Int.random(in: 3...9, using: &generator))" }
+            let diff = LineDiff(left: TextDocument(lines: left), right: TextDocument(lines: right))
+            #expect(diff.hunks == referenceHunks(left, right), "\(left) \(right)")
+        }
+    }
+
+    @Test func `works out rows from the hunks`() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<200 {
+            let left = (0..<Int.random(in: 0...25, using: &generator)).map { _ in "\(Int.random(in: 0...5, using: &generator))" }
+            let right = (0..<Int.random(in: 0...25, using: &generator)).map { _ in "\(Int.random(in: 0...5, using: &generator))" }
+            let diff = LineDiff(left: TextDocument(lines: left), right: TextDocument(lines: right))
+            let rows = Array(diff.rows)
+            // Every line shows up exactly once, in order, on its own side.
+            #expect(rows.compactMap(\.left) == Array(left.indices))
+            #expect(rows.compactMap(\.right) == Array(right.indices))
+            for (index, row) in rows.enumerated() {
+                if let line = row.left { #expect(diff.row(ofLine: line, on: .left) == index) }
+                if let line = row.right { #expect(diff.row(ofLine: line, on: .right) == index) }
+                #expect(diff.hunk(containingRow: index) == row.hunk)
+                if row.kind == .same, let l = row.left, let r = row.right { #expect(left[l] == right[r]) }
+            }
+            for (index, start) in diff.hunkRows.enumerated() {
+                #expect(rows[start].hunk == index)
+            }
+        }
+    }
+
+    @Test func `copies a single changed, removed or added line`() {
+        let diff = LineDiff(left: TextDocument("a\nold 1\nold 2\nold 3\nz\n"), right: TextDocument("a\nnew 1\nz\nonly right\n"))
+        #expect(diff.rows.map(\.kind) == [.same, .changed, .removed, .removed, .same, .added])
+        // A changed line replaces its partner.
+        #expect(diff.copying(row: 1, toRight: true).text == "a\nold 1\nz\nonly right\n")
+        #expect(diff.copying(row: 1, toRight: false).text == "a\nnew 1\nold 2\nold 3\nz\n")
+        // A removed line is inserted after the other side's lines of the hunk, or removed.
+        #expect(diff.copying(row: 3, toRight: true).text == "a\nnew 1\nold 3\nz\nonly right\n")
+        #expect(diff.copying(row: 2, toRight: false).text == "a\nold 1\nold 3\nz\n")
+        // An added line is removed, or inserted on the left.
+        #expect(diff.copying(row: 5, toRight: true).text == "a\nnew 1\nz\n")
+        #expect(diff.copying(row: 5, toRight: false).text == "a\nold 1\nold 2\nold 3\nz\nonly right\n")
+        #expect(diff.edit(copyingRow: 0, toRight: true) == nil)
+    }
+
+    @Test func `copying the lines of a hunk one by one ends where copying the hunk does`() {
+        let left = TextDocument("keep\nl1\nl2\nl3\nl4\nend\n")
+        var right = TextDocument("keep\nr1\nr2\nend\n")
+        let whole = LineDiff(left: left, right: right).copying(hunk: 0, toRight: true)
+        var steps = 0
+        while let first = LineDiff(left: left, right: right).hunkRows.first, steps < 10 {
+            right = LineDiff(left: left, right: right).copying(row: first, toRight: true)
+            steps += 1
+        }
+        #expect(right == whole)
+        #expect(steps == 4)
+    }
+}
+
+struct LineAnchorTests {
+    @Test func `aligns the anchored lines on one row`() {
+        let left = TextDocument("a\nb\nc\nd\n")
+        let right = TextDocument("x\nc\ny\nb\n")
+        let plain = LineDiff(left: left, right: right)
+        let anchored = LineDiff(left: left, right: right, anchors: [LineAnchor(left: 1, right: 3)])
+        #expect(plain.row(ofLine: 1, on: .left) != plain.row(ofLine: 3, on: .right))
+        #expect(anchored.row(ofLine: 1, on: .left) == anchored.row(ofLine: 3, on: .right))
+        #expect(anchored.rows[anchored.row(ofLine: 1, on: .left)].kind == .same)
+        #expect(Array(anchored.rows).compactMap(\.left) == [0, 1, 2, 3])
+        #expect(Array(anchored.rows).compactMap(\.right) == [0, 1, 2, 3])
+    }
+
+    @Test func `pairs anchored lines that differ as a change of their own`() {
+        let diff = LineDiff(left: TextDocument("a\nb\nc\n"), right: TextDocument("x\ny\nc\n"), anchors: [LineAnchor(left: 0, right: 1)])
+        let row = diff.rows[diff.row(ofLine: 0, on: .left)]
+        #expect(row.kind == .changed)
+        #expect(row.right == 1)
+        #expect(diff.hunks.contains(Hunk(left: 0..<1, right: 1..<2)))
+        #expect(Array(diff.rows).compactMap(\.right) == [0, 1, 2])
+    }
+
+    @Test func `keeps anchors in range, sorted and uncrossed`() {
+        let anchors = [LineAnchor(left: 5, right: 1), LineAnchor(left: 2, right: 3), LineAnchor(left: 9, right: 0), LineAnchor(left: 4, right: 4), LineAnchor(left: 50, right: 5)]
+        #expect(LineAnchor.normalized(anchors, leftCount: 10, rightCount: 10) == [LineAnchor(left: 2, right: 3), LineAnchor(left: 4, right: 4)])
+    }
+
+    @Test func `a new anchor replaces the ones it crosses or shares a line with`() {
+        let anchors = [LineAnchor(left: 1, right: 1), LineAnchor(left: 5, right: 5), LineAnchor(left: 8, right: 9)]
+        #expect(LineAnchor.adding(LineAnchor(left: 6, right: 2), to: anchors) == [LineAnchor(left: 1, right: 1), LineAnchor(left: 6, right: 2), LineAnchor(left: 8, right: 9)])
+        #expect(LineAnchor.adding(LineAnchor(left: 8, right: 3), to: anchors) == [LineAnchor(left: 1, right: 1), LineAnchor(left: 8, right: 3)])
+    }
+
+    @Test func `moves with edits and goes away when its line does`() {
+        let anchor = LineAnchor(left: 4, right: 6)
+        #expect(anchor.adjusted(for: LineEdit(side: .left, range: 0..<0, lines: ["new"])) == LineAnchor(left: 5, right: 6))
+        #expect(anchor.adjusted(for: LineEdit(side: .right, range: 6..<7, lines: ["typed"])) == anchor)
+        #expect(anchor.adjusted(for: LineEdit(side: .right, range: 5..<7, lines: [])) == nil)
+        #expect(anchor.adjusted(for: LineEdit(side: .left, range: 9..<12, lines: [])) == anchor)
+    }
+}

@@ -78,8 +78,8 @@ final class DocumentModel: DifferenceNavigating {
             let rightDocument = try b.get()
             leftPages = leftDocument?.pageCount
             rightPages = rightDocument?.pageCount
-            text.left = Side(content: .text(leftDocument?.document.text ?? ""))
-            text.right = Side(content: .text(rightDocument?.document.text ?? ""))
+            text.left = Side(content: .text(leftDocument?.document ?? TextDocument("")))
+            text.right = Side(content: .text(rightDocument?.document ?? TextDocument("")))
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -107,15 +107,12 @@ struct DocumentCompareView: View {
                 KindMessage(systemImage: "exclamationmark.triangle", title: "The text could not be read", message: error)
             } else if model.isReading {
                 KindMessage(systemImage: "doc.richtext", title: "Reading the documents…", isWorking: true)
-            } else if let diff = text.diff {
-                if diff.statistics.isIdentical {
+            } else if let display = text.display {
+                if display.diff.statistics.isIdentical {
                     KindMessage(systemImage: "checkmark.circle.fill", title: "The text is the same",
                                 message: "Both documents hold the same text. Layout, fonts and images are not compared.")
                 } else {
-                    HStack(spacing: 0) {
-                        DiffListView(model: text, diff: diff)
-                        ChangeMap(model: text, diff: diff)
-                    }
+                    DiffPane(model: text, display: display)
                 }
             } else {
                 KindMessage(systemImage: "doc.richtext", title: "Comparing the text…", isWorking: true)

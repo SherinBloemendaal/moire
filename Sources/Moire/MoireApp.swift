@@ -248,6 +248,7 @@ struct MoireCommands: Commands {
     /// Hex, image, table, document text or archive instead of the text comparison.
     private var isSpecial: Bool { isText && files.isSpecial && !compare.isEditing }
     private var changeCount: Int { isSpecial ? files.differenceCount : compare.hunkCount }
+    private var canSearch: Bool { isText && !isSpecial && !compare.isEditing && compare.display != nil }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -315,6 +316,21 @@ struct MoireCommands: Commands {
                 .keyboardShortcut("p")
                 .disabled(!state.canPrint)
         }
+        CommandGroup(replacing: .textEditing) {
+            Button("Find…") { compare.showSearch() }
+                .keyboardShortcut("f")
+                .disabled(!canSearch)
+            Button("Find Next") { compare.findNext() }
+                .keyboardShortcut("g")
+                .disabled(!canSearch)
+            Button("Find Previous") { compare.findPrevious() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!canSearch)
+            Divider()
+            Button("Go to Line…") { compare.isGoToLineVisible = true }
+                .keyboardShortcut("l")
+                .disabled(!canSearch)
+        }
         CommandMenu("Compare") {
             Button("Next Change") {
                 if isSpecial { files.navigator?.goToNextDifference() } else { compare.goToNextChange() }
@@ -333,6 +349,11 @@ struct MoireCommands: Commands {
             Button("Copy Change to Left") { compare.copyCurrentChange(toRight: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 .disabled(!isText || isSpecial || compare.currentHunk == nil)
+            Divider()
+            Button("Align Marked Lines") { compare.alignMarkedLines() }
+                .disabled(!isText || !compare.canAlign)
+            Button("Clear Alignments") { compare.clearAlignments() }
+                .disabled(!isText || (compare.anchors.isEmpty && compare.alignmentMarks.isEmpty))
             Divider()
             Button("Swap Sides") {
                 if isText { compare.swapSides() } else { state.folders.swapSides() }
