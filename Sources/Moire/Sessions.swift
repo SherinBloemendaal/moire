@@ -42,6 +42,9 @@ struct ComparisonSession: Codable, Hashable, Identifiable {
 /// The last comparisons, newest first, kept in UserDefaults.
 @Observable
 final class RecentSessions {
+    /// Shared by all windows.
+    static let shared = RecentSessions()
+
     private(set) var sessions: [ComparisonSession] = []
     private let key = "recentSessions"
     private let limit = 15

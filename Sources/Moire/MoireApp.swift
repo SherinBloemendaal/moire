@@ -6,14 +6,13 @@ struct MoireApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
     var body: some Scene {
-        Window("Moire", id: "main") {
-            ContentView(state: appDelegate.state)
-                .frame(minWidth: 820, minHeight: 520)
+        WindowGroup(id: "comparison", for: WindowRequest.self) { $request in
+            WindowRoot(request: request)
         }
         .defaultSize(width: 1240, height: 780)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
-            MoireCommands(state: appDelegate.state)
+            MoireCommands()
         }
     }
 }
@@ -30,7 +29,7 @@ final class AppState {
     let compare = CompareModel()
     let folders = FolderModel()
     let merge = MergeModel()
-    let recents = RecentSessions()
+    var recents: RecentSessions { RecentSessions.shared }
     /// True while the text comparison shows a pair picked from the folder comparison.
     var cameFromFolders = false
 
@@ -50,6 +49,25 @@ final class AppState {
         }
     }
 
+    /// Nothing loaded yet: files from Finder can go here instead of into a new window.
+    var isEmpty: Bool {
+        compare.isEmpty && !compare.isEditing && folders.left == nil && folders.right == nil && merge.merge == nil
+    }
+
+    /// For the window's tab and the Window menu.
+    var windowTitle: String {
+        switch mode {
+        case .folders:
+            let names = [folders.left, folders.right].compactMap { $0?.lastPathComponent }
+            return names.isEmpty ? "Folders" : names.joined(separator: " ⇄ ")
+        case .merge:
+            return merge.merge == nil ? "Merge" : "Merge: \(merge.labels.left) ⇄ \(merge.labels.right)"
+        case .text:
+            if compare.isEmpty { return "Moire" }
+            return "\(compare.left.title) ⇄ \(compare.right.title)"
+        }
+    }
+
     func openFromFolders(left: URL?, right: URL?) {
         compare.openPair(left: left, right: right)
         cameFromFolders = true
@@ -58,8 +76,6 @@ final class AppState {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let state = AppState()
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let flag = arguments.firstIndex(of: "--merge") {
@@ -71,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
-        if !urls.isEmpty { state.open(urls) }
+        if !urls.isEmpty { Windows.shared.withFrontmost { $0.open(urls) } }
     }
 
     /// `Moire --merge BASE LOCAL REMOTE MERGED`, the way `git mergetool` passes the files.
@@ -81,13 +97,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(2)
         }
         let urls = paths.prefix(4).map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
-        state.merge.openMergetool(base: urls[0], left: urls[1], right: urls[2], output: urls[3])
-        state.mode = .merge
+        Windows.shared.withFrontmost { state in
+            state.merge.openMergetool(base: urls[0], left: urls[1], right: urls[2], output: urls[3])
+            state.mode = .merge
+        }
         NSApp.activate()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        state.open(urls)
+        Windows.shared.open(urls)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -95,6 +113,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for state in Windows.shared.states {
+            guard Self.confirmQuit(state) else { return .terminateCancel }
+        }
+        return .terminateNow
+    }
+
+    /// Asks to save what this window has not saved yet. False means: do not quit.
+    private static func confirmQuit(_ state: AppState) -> Bool {
         if state.merge.isDirty {
             let alert = NSAlert()
             alert.messageText = "Save the merge result before quitting?"
@@ -106,37 +132,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Cancel")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                guard state.merge.save() else { return .terminateCancel }
+                guard state.merge.save() else { return false }
             case .alertSecondButtonReturn: break
-            default: return .terminateCancel
+            default: return false
             }
         }
 
-        guard state.compare.hasUnsavedChanges else { return .terminateNow }
+        guard state.compare.hasUnsavedChanges else { return true }
 
         let alert = NSAlert()
-        alert.messageText = "Save your changes before quitting?"
+        alert.messageText = "Save your changes to \(state.windowTitle) before quitting?"
         alert.informativeText = "A side has changes that are not saved yet."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Don't Save")
         alert.addButton(withTitle: "Cancel")
 
         switch alert.runModal() {
-        case .alertFirstButtonReturn: return state.compare.saveAll() ? .terminateNow : .terminateCancel
-        case .alertSecondButtonReturn: return .terminateNow
-        default: return .terminateCancel
+        case .alertFirstButtonReturn: return state.compare.saveAll()
+        case .alertSecondButtonReturn: return true
+        default: return false
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // git mergetool with `trustExitCode` reads a failure as "not merged yet".
-        guard state.merge.isMergetool, state.merge.exitStatus != 0 else { return }
-        exit(state.merge.exitStatus)
+        guard let merge = Windows.shared.states.first(where: { $0.merge.isMergetool })?.merge, merge.exitStatus != 0 else { return }
+        exit(merge.exitStatus)
     }
 }
 
 struct MoireCommands: Commands {
-    let state: AppState
+    @FocusedValue(\.appState) private var focused
+
+    /// The comparison in the front window. Without a window, an empty stand-in keeps the menus disabled.
+    private var state: AppState { focused ?? Windows.shared.frontmost ?? Windows.shared.placeholder }
 
     private var compare: CompareModel { state.compare }
     private var merge: MergeModel { state.merge }
@@ -149,6 +178,11 @@ struct MoireCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
+            Button("New Window") { Windows.shared.newWindow() }
+                .keyboardShortcut("n")
+            Button("New Tab") { Windows.shared.newTab() }
+                .keyboardShortcut("t")
+            Divider()
             Button("Open Files…") {
                 state.mode = .text
                 compare.openPanel(for: nil)
