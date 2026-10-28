@@ -105,4 +105,14 @@ public struct RemoteLocation: Sendable, Hashable, Codable {
         let endpoint = s3.endpoint.isEmpty ? "" : " on \(URL(string: s3.endpoint)?.host ?? s3.endpoint)"
         return url + endpoint
     }
+
+    /// Connects. A failed login, an unknown host key or a missing bucket is thrown here, with the
+    /// server's own explanation.
+    public func makeSource(password: String? = nil) throws -> any FolderSource {
+        switch scheme {
+        case .sftp: try SFTPSource(location: self)
+        case .ftp, .ftps, .ftpes: try FTPSource(location: self, password: password)
+        case .s3: try S3Source(location: self)
+        }
+    }
 }
