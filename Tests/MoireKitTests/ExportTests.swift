@@ -113,6 +113,10 @@ private let pairs: [(String, String)] = [
         #expect(patch("a\r\nb\r\n", "a\r\nB\r\n") == "--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n a\r\n-b\r\n+B\r\n")
     }
 
+    @Test func `CR lines are written with LF, the only break patch reads`() {
+        #expect(patch("a\rb\r", "a\rB\r") == "--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n")
+    }
+
     @Test(arguments: pairs.indices)
     func `patch turns the left file into the right one`(index: Int) throws {
         let (left, right) = pairs[index]

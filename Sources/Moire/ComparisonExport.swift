@@ -13,6 +13,14 @@ enum ComparisonExport {
         guard canExport(model) else { return }
         let left = TextDocument(model.left.text)
         let right = TextDocument(model.right.text)
+        if left.lineEnding == .cr || right.lineEnding == .cr {
+            let alert = NSAlert()
+            alert.messageText = "The patch will use LF line endings"
+            alert.informativeText = "A file with old Mac line endings (CR only) is one long line to patch and git apply, so its lines are written with LF. Applying the patch gives the right text, but with LF line endings."
+            alert.addButton(withTitle: "Export Anyway")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         // Both headers name the left file: `patch` applies to the first name and `git apply` to the
         // second, so with two different names they would each change another file.
         let name = model.left.url == nil ? model.right.title : model.left.title
