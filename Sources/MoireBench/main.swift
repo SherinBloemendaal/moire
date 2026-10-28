@@ -219,7 +219,8 @@ func run(_ options: Options) throws {
     if let baselineURL = options.baseline {
         let baseline = try JSONDecoder().decode(Report.self, from: Data(contentsOf: baselineURL))
         var slower: [String] = []
-        for (name, base) in baseline.scenarios.sorted(by: { $0.key < $1.key }) {
+        // Scenarios that take a few milliseconds vary by more than the allowed margin on their own.
+        for (name, base) in baseline.scenarios.sorted(by: { $0.key < $1.key }) where base.seconds >= 0.05 {
             guard let current = report.scenarios[name] else { continue }
             let ratio = current.seconds / base.seconds
             print(String(format: "%-36@ %+6.0f%% against the baseline", name as NSString, (ratio - 1) * 100))

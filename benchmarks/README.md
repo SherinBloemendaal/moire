@@ -19,6 +19,6 @@ file cache: the first, untimed run reads everything once.
 | `legacy-2000.json`, `legacy-5000.json`, `legacy-10000.json` | The 1.0 engine, measured before it was removed. Its time grows with the square of the file count (sorting rebuilt a lookup table on every comparison), so 100,000 files would take about half an hour per run. |
 | `engine-100k-m2max.json` | The new engine on an M2 Max (12 cores, 64 GB), 100,000 files. |
 | `engine-1m-m2max.json` | The same with 1,000,000 files (about 4.7 GB), past what macOS keeps in its file cache. |
-| `baseline-ci.json` | The CI baseline, taken from a run of the `benchmark` job on GitHub. |
+| `baseline-ci.json` | The CI baseline, from the `benchmark` job on GitHub (Apple M1, virtual, 3 cores). A run fails when a scenario of 50 ms or more takes over 50% longer. |
 
 `MOIRE_FOLDER_THREADS` and `MOIRE_CONTENT_THREADS` override the thread counts, for tuning.

@@ -1,0 +1,116 @@
+{
+  "cores" : 3,
+  "date" : "2026-10-28T02:18:35Z",
+  "machine" : "Apple M1 (Virtual)",
+  "memoryGB" : 7,
+  "scenarios" : {
+    "engine.binary.cached\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 8741.177556808094,
+      "megabytesPerSecond" : 559435.363635718,
+      "runs" : [
+        0.00244525,
+        0.00122225,
+        0.001830417
+      ],
+      "seconds" : 0.001830417
+    },
+    "engine.binary.cached\/tree-20000" : {
+      "bytes" : 98058891,
+      "files" : 20000,
+      "filesPerSecond" : 216084.52146056932,
+      "megabytesPerSecond" : 1010.3706615776599,
+      "runs" : [
+        0.103400583,
+        0.08072575,
+        0.092556375
+      ],
+      "seconds" : 0.092556375
+    },
+    "engine.binary\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 93.74718520414426,
+      "megabytesPerSecond" : 5999.819853065233,
+      "runs" : [
+        0.515285,
+        0.170671791,
+        0.138197542
+      ],
+      "seconds" : 0.170671791
+    },
+    "engine.binary\/tree-20000" : {
+      "bytes" : 98058891,
+      "files" : 20000,
+      "filesPerSecond" : 13087.210883062826,
+      "megabytesPerSecond" : 61.193341516316956,
+      "runs" : [
+        1.583763333,
+        1.5282095,
+        1.352212542
+      ],
+      "seconds" : 1.5282095
+    },
+    "engine.lines\/tree-20000" : {
+      "bytes" : 98058891,
+      "files" : 20000,
+      "filesPerSecond" : 15274.421209927488,
+      "megabytesPerSecond" : 71.42032644807662,
+      "runs" : [
+        1.309378583,
+        1.33820725,
+        1.274886417
+      ],
+      "seconds" : 1.309378583
+    },
+    "engine.metadata\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 23454.667258897014,
+      "megabytesPerSecond" : 1501098.704569409,
+      "runs" : [
+        0.000682167,
+        0.000527083,
+        0.002999375
+      ],
+      "seconds" : 0.000682167
+    },
+    "engine.metadata\/tree-20000" : {
+      "bytes" : 98058891,
+      "files" : 20000,
+      "filesPerSecond" : 194334.34540069295,
+      "megabytesPerSecond" : 908.6709210015727,
+      "runs" : [
+        0.1056515,
+        0.102915416,
+        0.085680125
+      ],
+      "seconds" : 0.102915416
+    },
+    "engine.quick\/large-16x64mb" : {
+      "bytes" : 1073741824,
+      "files" : 16,
+      "filesPerSecond" : 6395.203597302023,
+      "megabytesPerSecond" : 409293.03022732947,
+      "runs" : [
+        0.002501875,
+        0.003111666,
+        0.001387583
+      ],
+      "seconds" : 0.002501875
+    },
+    "engine.quick\/tree-20000" : {
+      "bytes" : 98058891,
+      "files" : 20000,
+      "filesPerSecond" : 13363.664021925837,
+      "megabytesPerSecond" : 62.485984501201976,
+      "runs" : [
+        1.7289189999999999,
+        1.472154167,
+        1.4965955420000001
+      ],
+      "seconds" : 1.4965955420000001
+    }
+  }
+}
