@@ -164,7 +164,11 @@ extension DiffListController {
         if length < utf16.length, length > 0 {
             length = utf16.rangeOfComposedCharacterSequence(at: length).location
         }
-        let shown = NSMutableAttributedString(string: utf16.substring(to: length), attributes: [
+        var visible = utf16.substring(to: length)
+        // A carriage return inside a line would start a new line out of sight; it is shown as
+        // a symbol of the same length, so every range below still fits.
+        if visible.contains("\r") { visible = visible.replacingOccurrences(of: "\r", with: "\u{240D}") }
+        let shown = NSMutableAttributedString(string: visible, attributes: [
             .font: metrics.font,
             .foregroundColor: Palette.text,
             .paragraphStyle: metrics.paragraph,
