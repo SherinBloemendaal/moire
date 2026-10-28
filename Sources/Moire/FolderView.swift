@@ -425,7 +425,7 @@ private struct FolderCard: View {
 }
 
 /// Choose how to sync, look at the plan, then run it.
-private struct SyncSheet: View {
+struct SyncSheet: View {
     let model: FolderModel
     let items: [Int]
     @Environment(\.dismiss) private var dismiss
