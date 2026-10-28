@@ -14,7 +14,7 @@ struct WindowRequest: Codable, Hashable {
 @Observable
 final class Windows {
     static let shared = Windows()
-    private static let log = Logger(subsystem: "io.github.sherinbloemendaal.moire", category: "windows")
+    static let log = Logger(subsystem: "io.github.sherinbloemendaal.moire", category: "windows")
 
     private struct Entry {
         weak var state: AppState?
@@ -30,6 +30,8 @@ final class Windows {
     private weak var tabParent: NSWindow?
     /// Files that arrived before any window existed (at launch).
     private var pending: [(AppState) -> Void] = []
+    /// The same files, so a window can be made for them when none appears.
+    private var pendingURLs: [URL] = []
 
     /// A stand-in for the menus while no window is open, so they show disabled instead of failing.
     let placeholder = AppState()
@@ -56,6 +58,22 @@ final class Windows {
 
     var frontmost: AppState? { states.first }
 
+    /// The menus hand SwiftUI's `openWindow` over at launch, before any window exists.
+    func provide(_ openWindow: OpenWindowAction) {
+        guard opener == nil else { return }
+        opener = { openWindow(value: $0) }
+    }
+
+    /// Launched to open files, macOS shows no window on its own (unless it restores some), so
+    /// the files would wait forever. Shortly after launch, files still waiting get a window.
+    func openWindowForWaitingFiles() {
+        guard frontmost == nil, !pendingURLs.isEmpty, let opener else { return }
+        let urls = pendingURLs
+        pending = []
+        pendingURLs = []
+        opener(WindowRequest(urls: urls))
+    }
+
     func register(_ state: AppState, openWindow: OpenWindowAction) {
         register(state) { openWindow(value: $0) }
     }
@@ -67,6 +85,7 @@ final class Windows {
         focus(state)
         let waiting = pending
         pending = []
+        pendingURLs = []
         for action in waiting { action(state) }
     }
 
@@ -117,8 +136,9 @@ final class Windows {
     func open(_ urls: [URL]) {
         Self.log.info("Opening \(urls.count, privacy: .public) items from outside the app")
         guard let frontmost else {
-            // At launch the first window is still on its way; the files wait for it.
+            // At launch the first window may still be on its way; the files wait for it.
             pending.append { $0.open(urls) }
+            pendingURLs += urls
             return
         }
         if frontmost.isEmpty {
@@ -202,7 +222,10 @@ struct WindowRoot: View {
             })
             .onAppear {
                 Windows.shared.register(state, openWindow: openWindow)
-                if let urls = request?.urls, !urls.isEmpty { state.open(urls) }
+                if let urls = request?.urls, !urls.isEmpty {
+                    Windows.log.debug("New window opens \(urls.count, privacy: .public) items")
+                    state.open(urls)
+                }
             }
             .onDisappear { Windows.shared.unregister(state) }
 

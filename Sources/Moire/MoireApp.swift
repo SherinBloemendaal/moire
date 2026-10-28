@@ -163,10 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls = paths.map { URL(filePath: $0, relativeTo: URL.currentDirectory()).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
         if !urls.isEmpty { Windows.shared.open(urls) }
+        // Files from Finder arrive through application(_:open:) around the same time.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingFiles() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         Windows.shared.open(urls)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Windows.shared.openWindowForWaitingFiles() }
     }
 
     /// `Moire --merge BASE LOCAL REMOTE MERGED`, the way `git mergetool` passes the files.
@@ -246,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct MoireCommands: Commands {
     @FocusedValue(\.appState) private var focused
+    @Environment(\.openWindow) private var openWindow
 
     /// The comparison in the front window. Without a window, an empty stand-in keeps the menus disabled.
     private var state: AppState { focused ?? Windows.shared.frontmost ?? Windows.shared.placeholder }
@@ -265,6 +269,8 @@ struct MoireCommands: Commands {
     private var canSearch: Bool { isText && !isSpecial && !compare.isEditing && compare.display != nil }
 
     var body: some Commands {
+        // The menus exist from launch on, before any window: the one place to get this early.
+        let _ = Windows.shared.provide(openWindow)
         CommandGroup(replacing: .newItem) {
             Button("New Window") { Windows.shared.newWindow() }
                 .keyboardShortcut("n")
