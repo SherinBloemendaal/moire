@@ -205,6 +205,10 @@ func run(_ options: Options) throws {
         }
     }
 
+    if let tree = datasets.first.flatMap({ try? FolderEngine(left: $0.1.left, right: $0.1.right, settings: FolderCompareSettings(method: .metadata)).run() }) {
+        print(String(format: "Folder tree storage: %.1f bytes per item (%d items)", Double(tree.storageBytes) / Double(tree.count), tree.count))
+    }
+
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     if let json = options.json {

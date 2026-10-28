@@ -40,6 +40,8 @@ public struct FolderTree: Sendable {
         public var size: Int64
         /// Nanoseconds since 1970.
         public var modified: Int64
+        /// Set while a folder is read, for the result cache. Not kept in the tree, so items read
+        /// back from a `FolderTree` have 0 here.
         public var fileID: UInt64
 
         public static let absent = SideInfo(kind: .absent, size: 0, modified: 0, fileID: 0)
@@ -51,7 +53,8 @@ public struct FolderTree: Sendable {
     var firstChild: [Int32] = [0]
     var childCount: [Int32] = [0]
     var nameOffsets: [UInt32] = [0]
-    var nameLengths: [UInt32] = [0]
+    /// Names are at most 255 bytes on APFS and HFS+, and S3 keys at most 1024.
+    var nameLengths: [UInt16] = [0]
     var nameBytes: [UInt8] = []
     var leftKinds: [Kind] = [.directory]
     var rightKinds: [Kind] = [.directory]
@@ -59,8 +62,6 @@ public struct FolderTree: Sendable {
     var rightSizes: [Int64] = [0]
     var leftDates: [Int64] = [0]
     var rightDates: [Int64] = [0]
-    var leftIDs: [UInt64] = [0]
-    var rightIDs: [UInt64] = [0]
     var statuses: [Status] = [.pending]
     /// Whether a folder's contents have been read. Files are always listed.
     var listed: [Bool] = [false]
@@ -117,17 +118,25 @@ public struct FolderTree: Sendable {
     }
 
     public func left(_ item: Int) -> SideInfo {
-        SideInfo(kind: leftKinds[item], size: leftSizes[item], modified: leftDates[item], fileID: leftIDs[item])
+        SideInfo(kind: leftKinds[item], size: leftSizes[item], modified: leftDates[item], fileID: 0)
     }
 
     public func right(_ item: Int) -> SideInfo {
-        SideInfo(kind: rightKinds[item], size: rightSizes[item], modified: rightDates[item], fileID: rightIDs[item])
+        SideInfo(kind: rightKinds[item], size: rightSizes[item], modified: rightDates[item], fileID: 0)
     }
 
     /// Lines that differ, for files compared line by line.
     public func changedLines(of item: Int) -> Int? { changedLines[Int32(item)] }
 
     public func error(at item: Int) -> String? { errors[Int32(item)] }
+
+    /// Bytes held by the arrays, for measuring how compact the tree is.
+    public var storageBytes: Int {
+        func bytes<T>(_ array: [T]) -> Int { array.count * MemoryLayout<T>.stride }
+        return bytes(parents) + bytes(firstChild) + bytes(childCount) + bytes(nameOffsets) + bytes(nameLengths)
+            + bytes(nameBytes) + bytes(leftKinds) + bytes(rightKinds) + bytes(leftSizes) + bytes(rightSizes)
+            + bytes(leftDates) + bytes(rightDates) + bytes(statuses) + bytes(listed)
+    }
 
     /// Items that are not folders and are not identical.
     public var differenceCount: Int {
@@ -152,7 +161,7 @@ public struct FolderTree: Sendable {
             childCount.append(0)
             nameOffsets.append(UInt32(nameBytes.count))
             let utf8 = child.name.utf8
-            nameLengths.append(UInt32(utf8.count))
+            nameLengths.append(UInt16(clamping: utf8.count))
             nameBytes.append(contentsOf: utf8)
             leftKinds.append(child.left.kind)
             rightKinds.append(child.right.kind)
@@ -160,8 +169,6 @@ public struct FolderTree: Sendable {
             rightSizes.append(child.right.size)
             leftDates.append(child.left.modified)
             rightDates.append(child.right.modified)
-            leftIDs.append(child.left.fileID)
-            rightIDs.append(child.right.fileID)
             statuses.append(child.status)
             let isFolder = (child.left.kind == .directory || child.left.kind == .absent) && (child.right.kind == .directory || child.right.kind == .absent)
             listed.append(!isFolder)
