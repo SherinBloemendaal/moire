@@ -212,7 +212,8 @@ public final class FolderEngine: Sendable {
             performanceCores: Self.performanceCores, isLocal: sides.left.volume.isLocal && sides.right.volume.isLocal,
             items: items, maxVnodes: Self.maxVnodes
         )
-        current.folders.grow(to: threads.folders)
+        // A thread count set by hand stays as it is; the other one still grows.
+        if settings.folderThreads == nil { current.folders.grow(to: threads.folders) }
         if settings.contentThreads == nil { current.contents?.grow(to: threads.contents) }
     }
 
@@ -316,7 +317,7 @@ public final class FolderEngine: Sendable {
         }
         foldersListed.add(1, ordering: .relaxed)
         let found = itemsFound.add(children.count, ordering: .relaxed).newValue
-        if found >= Self.bigTree, found - children.count < Self.bigTree, settings.folderThreads == nil {
+        if found >= Self.bigTree, found - children.count < Self.bigTree {
             growForBigTree(items: found)
         }
 
