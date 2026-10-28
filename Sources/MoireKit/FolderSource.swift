@@ -12,6 +12,9 @@ public protocol FolderSource: Sendable {
     func list(_ path: String, skipHidden: Bool) throws -> [DirectoryEntry]
     /// Opens a file for reading.
     func open(_ path: String) throws -> any ReadableFile
+    /// Opens a file whose size the folder listing reported. Remote sources use it to skip asking
+    /// the server for the size again, which costs a round trip per file.
+    func open(_ path: String, listedSize: Int64) throws -> any ReadableFile
     /// Where a symbolic link points.
     func linkDestination(_ path: String) throws -> String
     /// The local file for `path`, when there is one. Lets the app open, sync and edit it.
@@ -24,6 +27,12 @@ public protocol ReadableFile: AnyObject {
     /// Fills `buffer` as far as the file allows; returns the bytes read, 0 at the end.
     func readNext(into buffer: UnsafeMutableRawPointer, count: Int) throws -> Int
     func read(at offset: Int64, count: Int) throws -> Data
+}
+
+extension FolderSource {
+    public func open(_ path: String, listedSize: Int64) throws -> any ReadableFile {
+        try open(path)
+    }
 }
 
 extension ReadableFile {

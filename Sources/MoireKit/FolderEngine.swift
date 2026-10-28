@@ -356,7 +356,7 @@ public final class FolderEngine: Sendable {
         do {
             let (leftSource, rightSource) = currentSources()
             let verdict = try ContentComparer.compare(
-                leftSource.open(job.path), rightSource.open(job.path),
+                leftSource.open(job.path, listedSize: job.leftInfo.size), rightSource.open(job.path, listedSize: job.rightInfo.size),
                 method: settings.method, options: settings.diffOptions
             )
             let remembered: ResultCache.Verdict = switch verdict {

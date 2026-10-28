@@ -17,6 +17,9 @@ struct FolderOutline: NSViewRepresentable {
     let tree: FolderTree
     let version: Int
     let differencesOnly: Bool
+    /// Remote sides have no files here to show, rename, trash, sync or open.
+    let leftIsLocal: Bool
+    let rightIsLocal: Bool
     @Binding var selection: Set<Int>
     let perform: (FolderItemAction) -> Void
 
@@ -284,6 +287,7 @@ struct FolderOutline: NSViewRepresentable {
             if tree.isDirectory(node.index) {
                 if sender.isItemExpanded(node) { sender.collapseItem(node) } else { sender.expandItem(node) }
             } else {
+                // The owner checks whether both files can be opened.
                 parent?.perform(.open(node.index))
             }
         }
@@ -310,26 +314,33 @@ struct FolderOutline: NSViewRepresentable {
                 menu.addItem(item)
             }
 
+            func isLocal(_ side: SideID) -> Bool {
+                side == .left ? parent?.leftIsLocal ?? false : parent?.rightIsLocal ?? false
+            }
+            func exists(_ item: Int, _ side: SideID) -> Bool {
+                side == .left ? tree.left(item).exists : tree.right(item).exists
+            }
+
             if items.count == 1, !tree.isDirectory(items[0]) {
-                add("Compare Files", .open(items[0]))
+                let openable = SideID.allCases.allSatisfy { !exists(items[0], $0) || isLocal($0) }
+                add(openable ? "Compare Files" : "Compare Files (not for files on a server)", .open(items[0]), enabled: openable)
                 menu.addItem(.separator())
             }
-            add("Sync…", .sync(items))
+            add("Sync…", .sync(items), enabled: isLocal(.left) && isLocal(.right))
             menu.addItem(.separator())
             for side in SideID.allCases {
-                let exists = items.contains { side == .left ? tree.left($0).exists : tree.right($0).exists }
-                add("Show \(side.name) in Finder", .showInFinder(items, side), enabled: exists)
+                let available = isLocal(side) && items.contains { exists($0, side) }
+                add("Show \(side.name) in Finder", .showInFinder(items, side), enabled: available)
             }
             menu.addItem(.separator())
             if items.count == 1 {
                 for side in SideID.allCases {
-                    let exists = side == .left ? tree.left(items[0]).exists : tree.right(items[0]).exists
-                    add("Rename \(side.name)…", .rename(items[0], side), enabled: exists)
+                    add("Rename \(side.name)…", .rename(items[0], side), enabled: isLocal(side) && exists(items[0], side))
                 }
             }
             for side in SideID.allCases {
-                let exists = items.contains { side == .left ? tree.left($0).exists : tree.right($0).exists }
-                add("Move \(side.name) to Trash", .trash(items, side), enabled: exists)
+                let available = isLocal(side) && items.contains { exists($0, side) }
+                add("Move \(side.name) to Trash", .trash(items, side), enabled: available)
             }
         }
 

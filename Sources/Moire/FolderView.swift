@@ -1,3 +1,4 @@
+import AppKit
 import MoireKit
 import SwiftUI
 
@@ -8,11 +9,12 @@ struct FolderView: View {
     @State private var selection: Set<Int> = []
     @State private var syncItems: [Int]?
     @State private var showsFilters = false
+    @State private var connectRequest: ConnectRequest?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                FolderCard(model: model, side: .left)
+                FolderCard(model: model, side: .left) { connectRequest = ConnectRequest(side: .left) }
                 Button {
                     withAnimation(.spring(duration: 0.4, bounce: 0.35)) { model.swapSides() }
                 } label: {
@@ -26,17 +28,19 @@ struct FolderView: View {
                 .buttonStyle(.plain)
                 .help("Swap the left and right folder")
                 .padding(.horizontal, 10)
-                FolderCard(model: model, side: .right)
+                FolderCard(model: model, side: .right) { connectRequest = ConnectRequest(side: .right) }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
 
             Group {
-                if let tree = model.tree, model.left != nil, model.right != nil {
+                if let tree = model.tree, model.hasBothSides {
                     FolderOutline(
                         tree: tree,
                         version: model.version,
                         differencesOnly: model.filter == .differences,
+                        leftIsLocal: model.isLocal(.left),
+                        rightIsLocal: model.isLocal(.right),
                         selection: $selection,
                         perform: perform
                     )
@@ -61,6 +65,9 @@ struct FolderView: View {
         .sheet(item: Binding(get: { syncItems.map(SyncRequest.init) }, set: { syncItems = $0?.items })) { request in
             SyncSheet(model: model, items: request.items)
         }
+        .sheet(item: $connectRequest) { request in
+            ConnectSheet(model: model, side: request.side)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -74,6 +81,11 @@ struct FolderView: View {
     private func perform(_ action: FolderItemAction) {
         switch action {
         case .open(let item):
+            // Files on a server are not downloaded for the text comparison.
+            guard model.canOpen(item) else {
+                NSSound.beep()
+                return
+            }
             openFiles(model.url(of: item, on: .left), model.url(of: item, on: .right))
         case .showInFinder(let items, let side):
             model.showInFinder(items, side: side)
@@ -82,6 +94,7 @@ struct FolderView: View {
         case .rename(let item, let side):
             model.rename(item, side: side)
         case .sync(let items):
+            guard model.canSync else { return }
             syncItems = items
         }
     }
@@ -97,6 +110,9 @@ struct FolderView: View {
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                 Text("Moire compares every file in them, on all cores. Double-click a file to see what changed.")
                     .foregroundStyle(.secondary)
+                Text("Folders on a server work too: SFTP, FTP, FTPS and S3, from the server button on a card.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             .padding(30)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -111,7 +127,7 @@ struct FolderView: View {
                 Button("Stop", systemImage: "stop.fill") { model.stop() }
                     .buttonStyle(.borderless)
                     .help("Stop comparing and keep what was found so far")
-            } else if model.tree != nil, model.left != nil, model.right != nil {
+            } else if model.tree != nil, model.hasBothSides {
                 Chip(text: "\(model.count(.different)) different", color: Theme.changed)
                 Chip(text: "\(model.count(.leftOnly)) left only", color: Theme.removed)
                 Chip(text: "\(model.count(.rightOnly)) right only", color: Theme.added)
@@ -149,12 +165,12 @@ struct FolderView: View {
             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless)
                 .help("Compare again")
-                .disabled(model.left == nil || model.right == nil)
+                .disabled(!model.hasBothSides)
 
             Button { syncItems = Array(selection) } label: { Image(systemName: "arrow.triangle.2.circlepath") }
                 .buttonStyle(.borderless)
-                .help("Sync the folders, or the selected items")
-                .disabled(model.tree == nil || model.isComparing || model.left == nil || model.right == nil)
+                .help(model.hasBothSides && !model.canSync ? "Sync works between folders on this Mac only" : "Sync the folders, or the selected items")
+                .disabled(model.tree == nil || model.isComparing || !model.canSync)
 
             Picker("Show", selection: $model.filter) {
                 Text("All").tag(FolderModel.Filter.all)
@@ -256,54 +272,85 @@ private struct FilterPopover: View {
 private struct FolderCard: View {
     let model: FolderModel
     let side: SideID
+    let connect: () -> Void
     @State private var isTargeted = false
 
+    private var tint: Color { side == .left ? Theme.removed : Theme.added }
+
     var body: some View {
-        let url = side == .left ? model.left : model.right
+        let location = model.location(side)
         let volume = side == .left ? model.leftVolume : model.rightVolume
-        Button { model.choose(side) } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(side == .left ? Theme.removed.opacity(0.14) : Theme.added.opacity(0.14))
-                    Image(systemName: volume?.isLocal == false ? "network" : "folder.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(side == .left ? Theme.removed : Theme.added)
-                }
-                .frame(width: 32, height: 32)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(url?.lastPathComponent ?? "Choose the \(side.name.lowercased()) folder…")
+        HStack(spacing: 0) {
+            Button { model.choose(side) } label: {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(tint.opacity(0.14))
+                        Image(systemName: icon(location, volume))
                             .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tint)
+                    }
+                    .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(title(location))
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                            if let badge = badge(location, volume) {
+                                Text(badge)
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(Theme.cyan)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1.5)
+                                    .background(Theme.cyan.opacity(0.14), in: Capsule())
+                                    .help("Compared by size and date unless you pick another method: reading every file over the network is slow.")
+                            }
+                        }
+                        Text(subtitle(location))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        if let volume, !volume.isLocal {
-                            Text("Network disk")
-                                .font(.system(size: 9.5, weight: .semibold))
-                                .foregroundStyle(Theme.cyan)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1.5)
-                                .background(Theme.cyan.opacity(0.14), in: Capsule())
-                                .help("Compared by size and date unless you pick another method: reading every file over the network is slow.")
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button("Choose Folder…", systemImage: "folder") { model.choose(side) }
+                Button("Connect to Server…", systemImage: "server.rack", action: connect)
+                let recents = RecentServers.load()
+                if !recents.isEmpty {
+                    Divider()
+                    Section("Recent Servers") {
+                        ForEach(recents.prefix(6), id: \.self) { recent in
+                            Button(recent.displayName) { model.set(recent, on: side) }
                         }
                     }
-                    Text(url.map { ($0.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath } ?? "Click, or drop a folder here")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
-                Spacer(minLength: 0)
+            } label: {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Theme.pane, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(isTargeted ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.paneBorder), lineWidth: isTargeted ? 2 : 1)
-            )
-            .contentShape(Rectangle())
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Choose a folder, or connect to a server (SFTP, FTP, S3)")
+            .padding(.trailing, 6)
         }
-        .buttonStyle(.plain)
+        .background(Theme.pane, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isTargeted ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.paneBorder), lineWidth: isTargeted ? 2 : 1)
+        )
         .scaleEffect(isTargeted ? 1.015 : 1)
         .animation(.spring(duration: 0.25), value: isTargeted)
         .dropDestination(for: URL.self) { urls, _ in
@@ -311,6 +358,33 @@ private struct FolderCard: View {
             model.set(folder, on: side)
             return true
         } isTargeted: { isTargeted = $0 }
+    }
+
+    private func icon(_ location: FolderLocation?, _ volume: Volume?) -> String {
+        if location?.remote != nil { return "server.rack" }
+        return volume?.isLocal == false ? "network" : "folder.fill"
+    }
+
+    private func title(_ location: FolderLocation?) -> String {
+        switch location {
+        case .local(let url): url.lastPathComponent
+        case .remote(let remote): remote.name
+        case nil: "Choose the \(side.name.lowercased()) folder…"
+        }
+    }
+
+    private func subtitle(_ location: FolderLocation?) -> String {
+        switch location {
+        case .local(let url): (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
+        case .remote(let remote): remote.displayName
+        case nil: "Click, or drop a folder here"
+        }
+    }
+
+    private func badge(_ location: FolderLocation?, _ volume: Volume?) -> String? {
+        if let remote = location?.remote { return remote.scheme.title }
+        if let volume, !volume.isLocal { return "Network disk" }
+        return nil
     }
 }
 
