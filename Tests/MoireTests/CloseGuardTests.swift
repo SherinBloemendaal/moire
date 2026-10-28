@@ -32,18 +32,17 @@ struct CloseGuardTests {
         let window = window(with: delegate, state: state)
         defer { CloseGuard.confirm = { AppDelegate.confirmQuit($0, closing: true) } }
 
+        // Asked the way AppKit asks before closing. Really closing the last window would end the
+        // test process, which hides the tests after it.
         var askedAbout: AppState?
         CloseGuard.confirm = { askedAbout = $0; return false }
-        window.orderFrontRegardless()
-        window.performClose(nil)
-        #expect(window.isVisible)
+        #expect(window.delegate?.windowShouldClose?(window) == false)
         #expect(askedAbout === state)
         // SwiftUI's delegate is not asked when the user already said no.
         #expect(delegate.asked == 0)
 
         CloseGuard.confirm = { _ in true }
-        window.performClose(nil)
-        #expect(!window.isVisible)
+        #expect(window.delegate?.windowShouldClose?(window) == true)
         #expect(delegate.asked == 1)
     }
 
