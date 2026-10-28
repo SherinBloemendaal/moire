@@ -36,6 +36,10 @@
     <string>seqlBoU7TB40qgu1ZvTZvcw2GsDLwwuv5v3W2SRKUug=</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
