@@ -57,7 +57,7 @@ The script downloads `Moire.zip` from the GitHub release, checks it against `SHA
 
 ### Download
 
-Download [`Moire.dmg`](https://github.com/SherinBloemendaal/moire/releases/latest/download/Moire.dmg), open it, and drag Moire onto the Applications folder. It runs on Apple Silicon and Intel Macs with macOS 15 or later.
+Download `Moire-<version>.dmg` from the [latest release](https://github.com/SherinBloemendaal/moire/releases/latest), open it, and drag Moire onto the Applications folder. It runs on Apple Silicon and Intel Macs with macOS 15 or later.
 
 <details>
 <summary><b>Other downloads and the first launch</b></summary>
@@ -249,12 +249,12 @@ Requires macOS 15 or later and Xcode 26 (Swift 6.2 or later). There are no depen
 ```bash
 ./build-app.sh               # build/Moire.app for this Mac, with the moire command inside
 UNIVERSAL=1 ./build-app.sh   # Apple Silicon and Intel in one app
-scripts/make-dmg.sh          # build/Moire.dmg from build/Moire.app
+scripts/make-dmg.sh          # build/Moire-<version>.dmg from build/Moire.app
 swift test                   # run the tests
 swift build -c release --product moire-bench && .build/release/moire-bench run --files 100000
 ```
 
-Releases are built by GitHub Actions: push a tag like `v1.2.0` and the [Release workflow](.github/workflows/release.yml) tests, builds a universal `Moire.app`, and publishes `Moire.dmg` and `Moire.zip` with `SHA256SUMS`. The CI workflow also runs the benchmark on every push; see [benchmarks/](benchmarks/README.md).
+Releases are built by GitHub Actions: push a tag like `v1.2.0` and the [Release workflow](.github/workflows/release.yml) tests, builds a universal `Moire.app`, and publishes `Moire-<version>.dmg` and `Moire.zip` with `SHA256SUMS`. The CI workflow also runs the benchmark on every push; see [benchmarks/](benchmarks/README.md).
 
 <details>
 <summary><b>Project layout</b></summary>

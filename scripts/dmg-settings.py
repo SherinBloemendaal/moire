@@ -1,4 +1,4 @@
-# dmgbuild settings for Moire.dmg: the app on the left, an Applications link on the right,
+# dmgbuild settings for the Moire DMG: the app on the left, an Applications link on the right,
 # and art/dmg-background.svg (as Resources/dmg-background.tiff) behind them.
 # Used by scripts/make-dmg.sh; `defines` comes from dmgbuild's -D options.
 
