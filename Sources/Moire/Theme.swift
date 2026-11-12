@@ -281,3 +281,83 @@ extension ButtonStyle where Self == BarButtonStyle {
 extension ToggleStyle where Self == BarToggleStyle {
     static var bar: BarToggleStyle { BarToggleStyle() }
 }
+
+extension View {
+    /// The one main action of a view: glass tinted in the brand color on macOS 26 and later,
+    /// a filled button in the brand color before that. Only this button gets the tint; a tint on
+    /// the whole window would fill every glass button with it.
+    @ViewBuilder
+    func prominentButton() -> some View {
+        if #available(macOS 26, *) {
+            buttonStyle(.glassProminent).tint(Theme.iris)
+        } else {
+            buttonStyle(.borderedProminent).tint(Theme.iris)
+        }
+    }
+
+    /// Every other button next to the main one: plain glass, or a bordered button before macOS 26.
+    @ViewBuilder
+    func secondaryButton() -> some View {
+        if #available(macOS 26, *) {
+            buttonStyle(.glass)
+        } else {
+            buttonStyle(.bordered)
+        }
+    }
+
+    /// Shows what went wrong in a banner at the top of the view until it is closed, instead of a
+    /// dialog that stops everything. The same banner for every part of the window.
+    func errorBanner(_ message: Binding<String?>) -> some View {
+        overlay(alignment: .top) {
+            if let text = message.wrappedValue {
+                ErrorBanner(message: text) { message.wrappedValue = nil }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.smooth(duration: 0.25), value: message.wrappedValue)
+    }
+}
+
+/// A failure the person should read: what happened, and a button to close it.
+struct ErrorBanner: View {
+    let message: String
+    let close: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Something went wrong").font(.system(size: 13, weight: .semibold))
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Close", systemImage: "xmark", action: close)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bar)
+                .help("Close this message")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 560)
+        .glass(in: RoundedRectangle(cornerRadius: 14))
+        .cardShadow()
+    }
+}
+
+/// Space between two toolbar groups, so each floats in its own glass capsule on macOS 26 and later.
+struct ToolbarGap: ToolbarContent {
+    var placement = ToolbarItemPlacement.primaryAction
+
+    var body: some ToolbarContent {
+        if #available(macOS 26, *) {
+            ToolbarSpacer(.fixed, placement: placement)
+        }
+    }
+}

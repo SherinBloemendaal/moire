@@ -23,7 +23,8 @@ struct ArchiveCardView: View {
                     } label: {
                         Label("Compare as Folders", systemImage: "folder").padding(.horizontal, 6)
                     }
-                    .buttonStyle(GlowButtonStyle())
+                    .prominentButton()
+                    .controlSize(.large)
                     .disabled(compare.left.url == nil && compare.right.url == nil)
                 }
                 Button("Show the Bytes Instead") { files.chosen = .hex }

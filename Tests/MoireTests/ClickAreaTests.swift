@@ -79,11 +79,11 @@ struct ClickAreaTests {
         #expect(frame.width < ClickArea.minimum && frame.height < ClickArea.minimum)
     }
 
-    @Test(arguments: ["glow", "glass"])
+    @Test(arguments: ["prominent", "secondary"])
     func `the shared button styles take a click across the whole capsule`(style: String) async throws {
         let button = Button {} label: { Label("Styled", systemImage: "doc").padding(.horizontal, 6) }
         let view = Group {
-            if style == "glow" { button.buttonStyle(GlowButtonStyle()) } else { button.buttonStyle(GlassButtonStyle()) }
+            if style == "prominent" { button.prominentButton() } else { button.secondaryButton() }
         }
         let (window, host) = Press.host(view, size: NSSize(width: 300, height: 120))
         defer { window.orderOut(nil) }

@@ -14,7 +14,7 @@ struct MoireApp: App {
         // Files from Finder, the Dock or `open` go through the app delegate, which decides whether
         // they need a new window; SwiftUI must not make one of its own for them.
         .handlesExternalEvents(matching: [])
-        .windowToolbarStyle(.unified(showsTitle: false))
+        .windowToolbarStyle(.unified)
         .commands {
             MoireCommands()
         }
@@ -100,6 +100,33 @@ final class AppState {
             if compare.isEmpty { return "Moire" }
             return "\(compare.left.title) ⇄ \(compare.right.title)"
         }
+    }
+
+    /// Under the title: how much differs in what the window shows. Empty while there is nothing
+    /// to count yet.
+    var windowSubtitle: String {
+        switch mode {
+        case .folders:
+            guard folders.tree != nil else { return "" }
+            if folders.isComparing { return "Comparing…" }
+            let differing = folders.count(.different) + folders.count(.leftOnly) + folders.count(.rightOnly)
+            return differing == 0 ? "No differences" : Self.plural(differing, "difference")
+        case .merge:
+            guard merge.merge != nil else { return "" }
+            let open = merge.unresolvedCount
+            if merge.conflictCount == 0 { return "No conflicts" }
+            return open == 0 ? "All conflicts resolved" : "\(Self.plural(open, "conflict")) to resolve"
+        case .text:
+            guard !compare.isEmpty, !compare.isEditing, !compare.isLoading else { return "" }
+            // A hex, image or table view counts once it is shown; an archive view counts nothing.
+            if compare.fileView.isSpecial, compare.fileView.navigator == nil { return "" }
+            let changes = compare.fileView.isSpecial ? compare.fileView.differenceCount : compare.hunkCount
+            return changes == 0 ? "No changes" : Self.plural(changes, "change")
+        }
+    }
+
+    private static func plural(_ count: Int, _ noun: String) -> String {
+        "\(count) \(noun)\(count == 1 ? "" : "s")"
     }
 
     /// Unpacks archives (a side may also be a folder) and compares them in the folder comparison.

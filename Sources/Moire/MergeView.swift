@@ -47,14 +47,7 @@ struct MergeView: View {
             }
         }
         .background(Theme.window)
-        .alert("Something went wrong", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
-            Button("OK") { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
+        .errorBanner(Binding(get: { model.errorMessage }, set: { model.errorMessage = $0 }))
     }
 
     private var header: some View {
@@ -364,8 +357,7 @@ private struct ResultHeader: View {
             } label: {
                 Label(model.isMergetool ? "Save Result" : "Save…", systemImage: "square.and.arrow.down").padding(.horizontal, 2)
             }
-            .buttonStyle(GlowButtonStyle())
-            .controlSize(.small)
+            .prominentButton()
             .help(model.isMergetool ? "Write the result for git (⌘S), then quit to finish" : "Save the merged result (⌘S)")
         }
         .padding(.horizontal, 12)
@@ -550,8 +542,7 @@ private struct ResultBlock: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Done") { withAnimation(.smooth) { model.commitEdit() } }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.iris)
+                    .secondaryButton()
             }
             .controlSize(.small)
             .padding(.leading, 56)
@@ -801,7 +792,8 @@ private struct MergeEmptyView: View {
                 Button { model.chooseFiles() } label: {
                     Label("Choose Files…", systemImage: "doc.on.doc").padding(.horizontal, 6)
                 }
-                .buttonStyle(GlowButtonStyle())
+                .prominentButton()
+                .controlSize(.large)
                 Text("Also runs as git mergetool: Moire --merge BASE LOCAL REMOTE MERGED")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.tertiary)

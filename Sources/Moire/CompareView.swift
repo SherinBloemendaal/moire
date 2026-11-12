@@ -36,14 +36,7 @@ struct CompareView: View {
         .sheet(isPresented: $model.isGoToLineVisible) {
             GoToLineView(model: model)
         }
-        .alert("Something went wrong", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
-            Button("OK") { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
+        .errorBanner(Binding(get: { model.errorMessage }, set: { model.errorMessage = $0 }))
     }
 
     private var header: some View {
@@ -383,18 +376,21 @@ private struct EmptyCompareView: View {
                     Button { model.openPanel(for: nil) } label: {
                         Label("Open Files…", systemImage: "doc.on.doc").padding(.horizontal, 6)
                     }
-                    .buttonStyle(GlowButtonStyle())
+                    .prominentButton()
+                    .controlSize(.large)
                     .keyboardShortcut("o")
 
                     Button { model.isEditing = true } label: {
                         Label("Paste Text", systemImage: "text.alignleft").padding(.horizontal, 6)
                     }
-                    .buttonStyle(GlassButtonStyle())
+                    .secondaryButton()
+                    .controlSize(.large)
 
                     Button(action: compareFolders) {
                         Label("Compare Folders…", systemImage: "folder").padding(.horizontal, 6)
                     }
-                    .buttonStyle(GlassButtonStyle())
+                    .secondaryButton()
+                    .controlSize(.large)
                 }
             }
             .padding(40)
@@ -412,49 +408,6 @@ private struct EmptyCompareView: View {
             model.open(urls)
             return !urls.isEmpty
         } isTargeted: { isTargeted = $0 }
-    }
-}
-
-struct GlowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.vertical, 9)
-            .padding(.horizontal, 12)
-            .modifier(GlowSurface(isPressed: configuration.isPressed))
-            // The whole capsule takes a click, whatever surface it is drawn with.
-            .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-/// The brand gradient with a glow; on macOS 26 and later, glass tinted in the brand color.
-private struct GlowSurface: ViewModifier {
-    let isPressed: Bool
-
-    func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content.glassEffect(.regular.tint(Theme.iris).interactive(), in: Capsule())
-        } else {
-            content
-                .background(Theme.brand, in: Capsule())
-                .shadow(color: Theme.iris.opacity(isPressed ? 0.2 : 0.45), radius: 12, y: 4)
-        }
-    }
-}
-
-struct GlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .padding(.vertical, 9)
-            .padding(.horizontal, 12)
-            .glass(in: Capsule(), interactive: true)
-            .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(duration: 0.2), value: configuration.isPressed)
     }
 }
 

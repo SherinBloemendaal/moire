@@ -74,14 +74,7 @@ struct FolderView: View {
         .sheet(item: $connectRequest) { request in
             ConnectSheet(model: model, side: request.side)
         }
-        .alert("Something went wrong", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
-            Button("OK") { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
+        .errorBanner(Binding(get: { model.errorMessage }, set: { model.errorMessage = $0 }))
     }
 
     private func perform(_ action: FolderItemAction) {

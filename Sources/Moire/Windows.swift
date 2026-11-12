@@ -216,6 +216,7 @@ struct WindowRoot: View {
         ContentView(state: state)
             .frame(minWidth: 820, minHeight: 520)
             .navigationTitle(state.windowTitle)
+            .navigationSubtitle(state.windowSubtitle)
             .focusedSceneValue(\.appState, state)
             .background(WindowReader { window in
                 Windows.shared.attach(window, to: state, asTab: request?.asTab == true)

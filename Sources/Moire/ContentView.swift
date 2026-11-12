@@ -47,10 +47,14 @@ struct ContentView: View {
                 .labelStyle(.titleAndIcon)
                 .fixedSize()
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 if state.mode == .text, !state.compare.isEmpty, !state.compare.isEditing {
                     ViewAsPicker(files: state.compare.fileView)
                 }
+            }
+            // On macOS 26 each group floats in its own glass capsule.
+            ToolbarGap(placement: .primaryAction)
+            ToolbarItem(placement: .primaryAction) {
                 if state.mode == .text, !state.compare.isEmpty || state.compare.isEditing {
                     Toggle(isOn: Bindable(state.compare).isEditing) {
                         Label(state.compare.isEditing ? "Done" : "Edit", systemImage: state.compare.isEditing ? "checkmark" : "pencil")
